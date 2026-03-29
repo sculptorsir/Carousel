@@ -5,8 +5,8 @@ import io
 import zipfile
 
 # ─────────────────── CONFIG ───────────────────
-HEADER_FONT = './fonts/Montserrat-Bold.ttf'
-TEXT_FONT = './fonts/Montserrat-Regular.ttf'
+HEADER_FONT = './fonts/GoogleSans-Bold.ttf'
+TEXT_FONT = './fonts/GoogleSans-Regular.ttf'
 WM_FONT_SIZE = 26
 WM_ALPHA = 130
 FINAL_W, FINAL_H = 1080, 1350
