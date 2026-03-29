@@ -1,262 +1,338 @@
 import streamlit as st
 import textwrap
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+from PIL import Image, ImageDraw, ImageFont
 import io
 import zipfile
 
-HEADER_FONT_NAME = './fonts/Montserrat-Bold.ttf' 
-TEXT_FONT_NAME = './fonts/Montserrat-Regular.ttf' 
-WATERMARK_FONT_SIZE = 26 
-WATERMARK_ALPHA = 130 
+# ─────────────────── CONFIG ───────────────────
+HEADER_FONT = './fonts/Montserrat-Bold.ttf'
+TEXT_FONT = './fonts/Montserrat-Regular.ttf'
+WM_FONT_SIZE = 26
+WM_ALPHA = 130
+FINAL_W, FINAL_H = 1080, 1350
 
-GLASS_BLUR_RADIUS = 40     
-GLASS_DARKEN_ALPHA = 170   
-BORDER_ALPHA = 30          
-
+# ─────────────────── HELPERS ───────────────────
 def hex_to_rgb(hex_color):
     hex_color = hex_color.lstrip('#')
     return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
 
-def create_editorial_glass(base_img, panel_width, panel_height, glass_x, glass_y):
-    glass_size = (panel_width, panel_height)
-    target_region = base_img.crop((glass_x, glass_y, glass_x + panel_width, glass_y + panel_height))
-    blurred_bg = target_region.filter(ImageFilter.GaussianBlur(GLASS_BLUR_RADIUS))
-    
-    darken = Image.new('RGBA', glass_size, (0, 0, 0, GLASS_DARKEN_ALPHA))
-    blurred_bg.alpha_composite(darken)
-    
-    draw_border = ImageDraw.Draw(blurred_bg)
-    draw_border.rectangle((0, 0, panel_width-1, panel_height-1), outline=(255, 255, 255, BORDER_ALPHA), width=1)
-    return blurred_bg
 
-def create_colored_backing(width, height, color, alpha):
-    rgb_color = color[:3] if len(color) == 4 else color
-    return Image.new('RGBA', (width, height), (*rgb_color, alpha))
-
-def parse_raw_text(content):
-    blocks = [block.strip() for block in content.split('\n\n') if block.strip()]
+def parse_slides(content):
+    raw_blocks = content.split('---')
     slides = []
-    for block in blocks:
+    for block in raw_blocks:
+        block = block.strip()
+        if not block:
+            continue
         lines = block.split('\n')
         title = lines[0].strip()
-        text = " ".join([line.strip() for line in lines[1:]])
-        slides.append({"title": title, "text": text})
+        body = '\n'.join(l for l in lines[1:]).strip()
+        slides.append({"title": title, "text": body})
     return slides
 
-st.set_page_config(page_title="Мой Генератор Каруселей", page_icon="⬛", layout="centered")
 
-st.title("Генератор Каруселей")
-st.markdown("Создавай карусели для соцсетей прямо с телефона. By @ТВОЙ_НИК")
-
-st.subheader("1. Фоны")
-uploaded_bgs = st.file_uploader(
-    "Загрузи фоны (можно выбрать сразу несколько)", 
-    type=['png', 'jpg', 'jpeg'], 
-    accept_multiple_files=True
-)
-
-st.subheader("2. Брендинг")
-user_watermark = st.text_input("Твой никнейм (водяной знак)", value="")
-
-st.subheader("3. Дизайн")
-
-st.write("### Эффекты Фона")
-bg_darken_percent = st.slider("Сила общего затемнения фона (%)", 0, 100, 0)
-
-st.write("---")
-
-st.write("### Подложка текста")
-col1, col2 = st.columns(2)
-with col1:
-    backing_type = st.selectbox("Тип подложки", ["Без подложки", "Матовое стекло", "Цветная заливка"])
-with col2:
-    text_position = st.selectbox("Позиция текста", ["Посередине", "Снизу", "Сверху"])
-
-if backing_type == "Цветная заливка":
-    col_c1, col_c2 = st.columns(2)
-    with col_c1:
-        backing_color_hex = st.color_picker("Цвет заливки", "#000000")
-    with col_c2:
-        backing_alpha = st.slider("Прозрачность заливки", 0, 255, 180)
-else:
-    backing_color_hex = "#FFFFFF" 
-    backing_alpha = 0 
-
-st.write("---")
-
-st.write("### Типографика")
-col_t1, col_t2, col_t3 = st.columns([2, 1, 1])
-with col_t1:
-    text_color_hex = st.color_picker("Цвет текста", "#FFFFFF")
-with col_t2:
-    add_shadow = st.toggle("Тень текста", value=False)
-with col_t3:
-    st.empty() 
-
-st.write("Типографика и отступы")
-col4, col5 = st.columns(2)
-with col4:
-    header_font_size = st.slider("Размер заголовка", min_value=30, max_value=120, value=70, step=2)
-with col5:
-    text_font_size = st.slider("Размер текста", min_value=20, max_value=80, value=40, step=2)
-
-space_between = st.slider("Отступ между заголовком и текстом", min_value=30, max_value=250, value=120, step=10)
-
-st.write("---")
-
-st.subheader("4. Контент")
-default_text = """ЗАГОЛОВОК 1
-Текст 1
-
-ЗАГОЛОВОК 2
-Текст 2"""
-text_input = st.text_area("Текст карусели (Пустая строка разделяет слайды)", value=default_text, height=250)
-
-st.write("---")
-col_btn1, col_btn2 = st.columns(2)
-
-with col_btn1:
-    btn_preview = st.button("👁 Предпросмотр (1 слайд)", use_container_width=True)
-with col_btn2:
-    btn_generate = st.button("🚀 Сгенерировать всё", type="primary", use_container_width=True)
-
-if btn_preview or btn_generate:
-    if not uploaded_bgs:
-        st.error("Сначала загрузи хотя бы один фон!")
-    elif not text_input.strip():
-        st.error("Вставь текст!")
+def prepare_bg(bg_file, darken_pct):
+    inp = Image.open(bg_file).convert("RGB")
+    w, h = inp.size
+    ratio = FINAL_W / FINAL_H
+    ir = w / h
+    if ir > ratio:
+        nw = int(h * ratio)
+        left = (w - nw) // 2
+        crop = inp.crop((left, 0, left + nw, h))
     else:
-        status_text = "Рендерим превью..." if btn_preview else "Собираем карусель..."
-        with st.spinner(status_text):
-            slides_data = parse_raw_text(text_input)
-            
-            if btn_preview:
-                slides_data = slides_data[:1]
-            
-            user_rgb_color = hex_to_rgb(text_color_hex)
-            backing_rgb_color = hex_to_rgb(backing_color_hex)
-            try:
-                h_font = ImageFont.truetype(HEADER_FONT_NAME, header_font_size)
-                t_font = ImageFont.truetype(TEXT_FONT_NAME, text_font_size)
-                w_font = ImageFont.truetype(TEXT_FONT_NAME, WATERMARK_FONT_SIZE)
-            except IOError:
-                st.error("Ошибка: шрифты не найдены в папке ./fonts/")
-                st.stop()
+        nh = int(w / ratio)
+        top = (h - nh) // 2
+        crop = inp.crop((0, top, w, top + nh))
+    base = crop.resize((FINAL_W, FINAL_H), Image.Resampling.LANCZOS).convert("RGBA")
+    if darken_pct > 0:
+        a = int(255 * darken_pct / 100)
+        base.alpha_composite(Image.new('RGBA', (FINAL_W, FINAL_H), (0, 0, 0, a)))
+    return base
 
-            generated_images = []
-            final_w, final_h = 1080, 1350 
 
-            for i, slide in enumerate(slides_data):
-                current_bg_file = uploaded_bgs[i % len(uploaded_bgs)]
-                
-                input_img = Image.open(current_bg_file).convert("RGB")
-                w, h = input_img.size
-                target_ratio = final_w / final_h
-                input_ratio = w / h
+def render_slide(slide, base_img, cfg):
+    img = base_img.copy()
+    draw = ImageDraw.Draw(img)
 
-                if input_ratio > target_ratio:
-                    new_w = int(h * target_ratio)
-                    left = (w - new_w) // 2
-                    base_img = input_img.crop((left, 0, left + new_w, h))
-                else:
-                    new_h = int(w / target_ratio)
-                    top = (h - new_h) // 2
-                    base_img = input_img.crop((0, top, w, top + new_h))
+    hf, tf, wf = cfg['hf'], cfg['tf'], cfg['wf']
+    color = cfg['color']
 
-                base_img = base_img.resize((final_w, final_h), Image.Resampling.LANCZOS).convert("RGBA")
-                
-                if bg_darken_percent > 0:
-                    alpha = int(255 * (bg_darken_percent / 100))
-                    darken_layer = Image.new('RGBA', (final_w, final_h), (0, 0, 0, alpha))
-                    base_img.alpha_composite(darken_layer)
+    h_wrap = max(10, int(1000 / cfg['hs']))
+    t_wrap = max(15, int(1120 / cfg['ts']))
 
-                img = base_img.copy()
-                draw = ImageDraw.Draw(img)
-                
-                h_wrap = max(10, int(1000 / header_font_size))
-                t_wrap = max(15, int(1120 / text_font_size))
-                
-                h_lines = textwrap.wrap(slide['title'], width=h_wrap)
-                t_lines = textwrap.wrap(slide['text'], width=t_wrap) 
-                
-                padding_top = 110 
-                padding_bottom = 90
-                
-                title_line_height = int(header_font_size * 1.2)
-                text_line_height = int(text_font_size * 1.5)
-                
-                total_text_height = (len(h_lines) * title_line_height) + space_between + (len(t_lines) * text_line_height)
-                panel_height = padding_top + total_text_height + padding_bottom
-                panel_width = 900
-                
-                glass_x = (final_w - panel_width) // 2
-                
-                if text_position == "Сверху":
-                    glass_y = 150 
-                elif text_position == "Снизу":
-                    glass_y = final_h - panel_height - 80 
-                else: 
-                    glass_y = (final_h - panel_height) // 2 - 20 
-                
-                if backing_type == "Матовое стекло":
-                    glass_panel = create_editorial_glass(base_img, panel_width, panel_height, glass_x, glass_y)
-                    img.alpha_composite(glass_panel, (glass_x, glass_y))
-                elif backing_type == "Цветная заливка":
-                    colored_backing = create_colored_backing(panel_width, panel_height, backing_rgb_color, backing_alpha)
-                    img.alpha_composite(colored_backing, (glass_x, glass_y))
-                
-                draw = ImageDraw.Draw(img) 
-                
-                if user_watermark:
-                    bbox = draw.textbbox((0, 0), user_watermark, font=w_font)
-                    w_width = bbox[2] - bbox[0]
-                    w_x = (final_w - w_width) // 2
-                    w_y = 60 
-                    draw.text((w_x, w_y), user_watermark, font=w_font, fill=(*user_rgb_color, WATERMARK_ALPHA))
-                
-                current_y = glass_y + padding_top
-                margin_x = glass_x + 80 
+    h_lines = textwrap.wrap(slide['title'], width=h_wrap)
+    paragraphs = slide['text'].split('\n')
+    t_lines = []
+    for p in paragraphs:
+        p = p.strip()
+        if p:
+            t_lines.extend(textwrap.wrap(p, width=t_wrap))
+        else:
+            t_lines.append('')
 
-                def draw_text_with_shadow(draw_obj, xy, text, font, fill_color):
-                    if add_shadow:
-                        shadow_color = (0, 0, 0, 128)
-                        draw_obj.text((xy[0]+3, xy[1]+3), text, font=font, fill=shadow_color)
-                    draw_obj.text(xy, text, font=font, fill=fill_color)
+    title_lh = int(cfg['hs'] * 1.2)
+    text_lh = int(cfg['ts'] * 1.5)
 
-                for line in h_lines:
-                    draw_text_with_shadow(draw, (margin_x, current_y), line, h_font, user_rgb_color)
-                    current_y += title_line_height
+    tx, ty = cfg['tx'], cfg['ty']
+    cur_y = ty
+    shadow = cfg['shadow']
 
-                current_y += space_between 
-                
-                for line in t_lines:
-                    draw_text_with_shadow(draw, (margin_x, current_y), line, t_font, user_rgb_color)
-                    current_y += text_line_height
-                
-                generated_images.append(img.convert("RGB"))
+    def draw_line(xy, text, font, fill):
+        if shadow:
+            draw.text((xy[0]+3, xy[1]+3), text, font=font, fill=(0, 0, 0, 128))
+        draw.text(xy, text, font=font, fill=fill)
 
-            if btn_preview:
-                st.success("Превью первого слайда готово!")
-                st.image(generated_images[0], use_container_width=True)
-            
-            if btn_generate:
-                st.success("Карусель собрана!")
-                cols = st.columns(2)
-                for idx, g_img in enumerate(generated_images):
-                    cols[idx % 2].image(g_img, use_container_width=True)
+    for line in h_lines:
+        draw_line((tx, cur_y), line, hf, color)
+        cur_y += title_lh
 
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-                    for idx, g_img in enumerate(generated_images):
-                        img_byte_arr = io.BytesIO()
-                        g_img.save(img_byte_arr, format='JPEG', quality=95)
-                        zip_file.writestr(f"slide_{idx+1}.jpg", img_byte_arr.getvalue())
+    cur_y += cfg['gap']
 
-                st.download_button(
-                    label="📥 Скачать всю карусель (ZIP)",
-                    data=zip_buffer.getvalue(),
-                    file_name="premium_carousel.zip",
-                    mime="application/zip",
-                    type="primary",
-                    use_container_width=True
-                )
+    for line in t_lines:
+        if line:
+            draw_line((tx, cur_y), line, tf, color)
+        cur_y += text_lh
+
+    # watermark
+    wm = cfg.get('wm')
+    if wm and (wm['text'] or wm['avatar']):
+        wm_text = wm['text']
+        av_img = wm['avatar']
+        av_sz = wm['av_size']
+
+        bbox_w, bbox_h = 0, 0
+        if wm_text:
+            bb = draw.textbbox((0, 0), wm_text, font=wf)
+            bbox_w = bb[2] - bb[0]
+            bbox_h = bb[3] - bb[1]
+
+        total_w = bbox_w + (av_sz + 12 if av_img else 0)
+        block_h = max(bbox_h, av_sz if av_img else 0)
+
+        wm_y = FINAL_H - 80 + wm['oy']
+
+        if wm['pos'] == 'Слева':
+            wm_x = 60 + wm['ox']
+        elif wm['pos'] == 'Справа':
+            wm_x = FINAL_W - total_w - 60 + wm['ox']
+        else:
+            wm_x = (FINAL_W - total_w) // 2 + wm['ox']
+
+        cx = int(wm_x)
+
+        if av_img and av_sz > 0:
+            av = av_img.copy().resize((av_sz, av_sz), Image.Resampling.LANCZOS).convert("RGBA")
+            mask = Image.new('L', (av_sz, av_sz), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, av_sz-1, av_sz-1), fill=255)
+            av.putalpha(mask)
+            av_y = int(wm_y + (block_h - av_sz) // 2)
+            img.alpha_composite(av, (cx, av_y))
+            cx += av_sz + 12
+            draw = ImageDraw.Draw(img)
+
+        if wm_text:
+            text_y = int(wm_y + (block_h - bbox_h) // 2)
+            draw.text((cx, text_y), wm_text, font=wf, fill=(*color[:3], WM_ALPHA))
+
+    return img.convert("RGB")
+
+
+# ─────────────────── APP ───────────────────
+st.set_page_config(page_title="Генератор Каруселей", page_icon="⬛", layout="wide")
+
+st.markdown("""
+<style>
+    .block-container { padding-top: 2rem; }
+    h1 { font-size: 1.6rem !important; margin-bottom: 0.3rem !important; }
+    h3 { font-size: 1rem !important; margin-top: 1.2rem !important; margin-bottom: 0.4rem !important; }
+    [data-testid="stHorizontalBlock"] > [data-testid="column"]:last-child {
+        position: sticky;
+        top: 2rem;
+        align-self: flex-start;
+    }
+    section[data-testid="stSidebar"] { display: none; }
+    .stSlider label { font-size: 0.85rem; }
+</style>
+""", unsafe_allow_html=True)
+
+left, right = st.columns([1, 1], gap="large")
+
+# ═══════════════ LEFT COLUMN ═══════════════
+with left:
+    st.title("Генератор Каруселей")
+
+    # ── ФОНЫ ──
+    st.markdown("### Фоны")
+    uploaded_bgs = st.file_uploader(
+        "Загрузи один или несколько фонов",
+        type=['png', 'jpg', 'jpeg'],
+        accept_multiple_files=True,
+        label_visibility="collapsed"
+    )
+
+    bg_darken = st.slider("Затемнение фона", 0, 100, 0, format="%d%%")
+
+    st.divider()
+
+    # ── НИКНЕЙМ И АВАТАРКА ──
+    st.markdown("### Никнейм")
+    wm_text = st.text_input("Текст", value="", placeholder="@username")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        wm_pos = st.selectbox("Позиция", ["Слева", "По центру", "Справа"], index=0)
+    with c2:
+        wm_avatar_file = st.file_uploader("Аватарка", type=['png', 'jpg', 'jpeg'])
+
+    c3, c4, c5 = st.columns(3)
+    with c3:
+        wm_av_size = st.slider("Размер аватарки", 20, 80, 40, step=2)
+    with c4:
+        wm_ox = st.slider("Сдвиг X", -200, 200, 0, step=5, key="wm_ox")
+    with c5:
+        wm_oy = st.slider("Сдвиг Y", -200, 200, 0, step=5, key="wm_oy")
+
+    st.divider()
+
+    # ── ТИПОГРАФИКА ──
+    st.markdown("### Типографика")
+    tc1, tc2 = st.columns(2)
+    with tc1:
+        text_color_hex = st.color_picker("Цвет текста", "#FFFFFF")
+    with tc2:
+        add_shadow = st.toggle("Тень текста", value=False)
+
+    tc3, tc4 = st.columns(2)
+    with tc3:
+        header_size = st.slider("Заголовок", 30, 120, 70, step=2)
+    with tc4:
+        text_size = st.slider("Основной текст", 20, 80, 40, step=2)
+
+    space_between = st.slider("Отступ заголовок → текст", 30, 250, 120, step=10)
+
+    st.divider()
+
+    # ── ПОЗИЦИЯ ТЕКСТА ──
+    st.markdown("### Позиция текста")
+    pc1, pc2 = st.columns(2)
+    with pc1:
+        text_x = st.slider("X (горизонталь)", 20, 500, 90, step=5)
+    with pc2:
+        text_y = st.slider("Y (вертикаль)", 50, 1100, 350, step=10)
+
+    st.divider()
+
+    # ── КОНТЕНТ ──
+    st.markdown("### Контент")
+    st.caption("Разделяй слайды через `---`. Первая строка блока – заголовок, остальное – текст. Пустые строки внутри блока = абзацы.")
+
+    default_text = """ЗАГОЛОВОК 1
+Текст первого слайда.
+
+Второй абзац.
+---
+ЗАГОЛОВОК 2
+Текст второго слайда.
+---
+ЗАГОЛОВОК 3
+Текст третьего слайда."""
+
+    text_input = st.text_area("Контент", value=default_text, height=280, label_visibility="collapsed")
+
+
+# ═══════════════ RIGHT COLUMN ═══════════════
+with right:
+    st.markdown("### Превью")
+
+    # Load fonts once
+    try:
+        hf = ImageFont.truetype(HEADER_FONT, header_size)
+        tf = ImageFont.truetype(TEXT_FONT, text_size)
+        wf = ImageFont.truetype(TEXT_FONT, WM_FONT_SIZE)
+        fonts_ok = True
+    except IOError:
+        fonts_ok = False
+        st.error("Шрифты не найдены в ./fonts/")
+
+    # Prepare avatar
+    avatar_img = None
+    if wm_avatar_file:
+        avatar_img = Image.open(wm_avatar_file).convert("RGBA")
+
+    cfg = {
+        'hf': hf if fonts_ok else None,
+        'tf': tf if fonts_ok else None,
+        'wf': wf if fonts_ok else None,
+        'color': hex_to_rgb(text_color_hex),
+        'hs': header_size,
+        'ts': text_size,
+        'tx': text_x,
+        'ty': text_y,
+        'gap': space_between,
+        'shadow': add_shadow,
+        'wm': {
+            'text': wm_text,
+            'pos': wm_pos,
+            'ox': wm_ox,
+            'oy': wm_oy,
+            'avatar': avatar_img,
+            'av_size': wm_av_size,
+        }
+    }
+
+    slides_data = parse_slides(text_input) if text_input.strip() else []
+
+    # ── LIVE PREVIEW ──
+    if uploaded_bgs and fonts_ok and slides_data:
+        bg = prepare_bg(uploaded_bgs[0], bg_darken)
+        preview = render_slide(slides_data[0], bg, cfg)
+        st.image(preview, use_container_width=True)
+    elif not uploaded_bgs:
+        st.info("Загрузи фон слева, чтобы увидеть превью")
+    elif not slides_data:
+        st.info("Добавь контент слева")
+
+    st.divider()
+
+    # ── GENERATE ALL ──
+    btn_gen = st.button("Сгенерировать всю карусель", type="primary", use_container_width=True)
+
+    if btn_gen:
+        if not uploaded_bgs:
+            st.error("Сначала загрузи фоны!")
+        elif not slides_data:
+            st.error("Добавь контент!")
+        elif not fonts_ok:
+            st.error("Шрифты не найдены!")
+        else:
+            with st.spinner("Генерация..."):
+                images = []
+                for i, slide in enumerate(slides_data):
+                    bg_file = uploaded_bgs[i % len(uploaded_bgs)]
+                    bg = prepare_bg(bg_file, bg_darken)
+                    img = render_slide(slide, bg, cfg)
+                    images.append(img)
+
+            st.success(f"Готово – {len(images)} слайд(ов)")
+
+            cols = st.columns(2)
+            for idx, img in enumerate(images):
+                cols[idx % 2].image(img, caption=f"Слайд {idx+1}", use_container_width=True)
+
+            # ZIP
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "a", zipfile.ZIP_DEFLATED) as zf:
+                for idx, img in enumerate(images):
+                    b = io.BytesIO()
+                    img.save(b, format='JPEG', quality=95)
+                    zf.writestr(f"slide_{idx+1}.jpg", b.getvalue())
+
+            st.download_button(
+                "Скачать карусель (ZIP)",
+                data=buf.getvalue(),
+                file_name="carousel.zip",
+                mime="application/zip",
+                type="primary",
+                use_container_width=True
+            )
