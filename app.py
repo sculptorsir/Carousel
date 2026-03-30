@@ -5,16 +5,12 @@ import zipfile
 import re
 from contextlib import ExitStack
 
-# ── pilmoji ──
 try:
     from pilmoji import Pilmoji
     HAS_PILMOJI = True
 except ImportError:
     HAS_PILMOJI = False
 
-# ─────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────
 HEADER_FONT_PATH = './fonts/GoogleSans-Bold.ttf'
 BODY_FONT_PATH = './fonts/GoogleSans-Regular.ttf'
 FW, FH = 1080, 1350
@@ -22,9 +18,6 @@ ACCENT = "#3B82F6"
 ACCENT2 = "#2563EB"
 SCROLL_H = 780
 
-# ─────────────────────────────────────────────
-# CSS
-# ─────────────────────────────────────────────
 st.set_page_config(page_title="Carousel Gen", page_icon="⬛", layout="wide")
 
 st.markdown(f"""
@@ -66,14 +59,9 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-
-# ─────────────────────────────────────────────
-# TEXT UTILS (Идеальный монолитный движок)
-# ─────────────────────────────────────────────
 def hex_to_rgb(h):
     h = h.lstrip('#')
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-
 
 def parse_bold(text):
     parts = re.split(r'(\*[^*]+\*)', text)
@@ -85,32 +73,25 @@ def parse_bold(text):
             segs.append((p, False))
     return segs
 
-
 def strip_markers(text):
     return text.replace('*', '')
 
-
 def get_advance(d, text, font):
-    """Точный просчет ширины с учетом пробелов и принудительным размером для ЛЮБЫХ эмодзи"""
     clean = text.replace('\uFE0F', '').replace('\uFE0E', '')
     adv = 0
     buf = ""
     for c in clean:
         cp = ord(c)
-        # 0x2600 и выше охватывает почти все смайлы, иконки и символы интерфейса
         if cp >= 0x2600 or cp in (0x23E9, 0x23EA): 
             if buf:
-                # Рисуем накопленный обычный текст (заменяем пробелы на неразрывные для точности)
                 adv += d.textlength(buf.replace(' ', '\u00A0'), font=font)
                 buf = ""
-            # Добавляем стандартную ширину эмодзи (чуть больше размера шрифта)
             adv += font.size * 1.15
         else:
             buf += c
     if buf:
         adv += d.textlength(buf.replace(' ', '\u00A0'), font=font)
     return adv
-
 
 def wrap_pixels(text, font, max_w, draw):
     words = text.split()
@@ -128,7 +109,6 @@ def wrap_pixels(text, font, max_w, draw):
     lines.append(' '.join(cur))
     return lines
 
-
 def draw_rich_line(target, x, y, text, f_reg, f_bold, color, shadow, use_pilmoji, pmj_context):
     segs = parse_bold(text)
     cx = x
@@ -136,23 +116,18 @@ def draw_rich_line(target, x, y, text, f_reg, f_bold, color, shadow, use_pilmoji
 
     for txt, bold in segs:
         font = f_bold if bold else f_reg
-        # Если есть Pilmoji, отдаем ему текст AS IS (с \uFE0F), он сам найдет и заменит картинками
+        clean_txt = txt.replace('\uFE0F', '').replace('\uFE0E', '')
         if use_pilmoji and pmj_context:
             if shadow:
-                pmj_context.text((cx + 3, y + 3), txt, font=font, fill=(0, 0, 0, 128))
-            pmj_context.text((cx, y), txt, font=font, fill=color)
+                pmj_context.text((cx + 3, y + 3), clean_txt, font=font, fill=(0, 0, 0, 128))
+            pmj_context.text((cx, y), clean_txt, font=font, fill=color)
         else:
-            clean_txt = txt.replace('\uFE0F', '')
             if shadow:
                 d.text((cx + 3, y + 3), clean_txt, font=font, fill=(0, 0, 0, 128))
             d.text((cx, y), clean_txt, font=font, fill=color)
             
-        cx += get_advance(d, txt, font)
+        cx += get_advance(d, clean_txt, font)
 
-
-# ─────────────────────────────────────────────
-# CORE LOGIC
-# ─────────────────────────────────────────────
 def parse_slides(content):
     blocks = content.split('---')
     slides = []
@@ -165,7 +140,6 @@ def parse_slides(content):
         body = '\n'.join(lines[1:]).strip()
         slides.append({"title": title, "text": body})
     return slides
-
 
 @st.cache_data(show_spinner=False)
 def prepare_bg_cached(file_bytes, darken, final_w, final_h):
@@ -187,7 +161,6 @@ def prepare_bg_cached(file_bytes, darken, final_w, final_h):
         base.alpha_composite(Image.new('RGBA', (final_w, final_h), (0, 0, 0, a)))
     return base
 
-
 def render_slide(slide, base, cfg):
     img = base.copy()
     draw = ImageDraw.Draw(img)
@@ -196,9 +169,9 @@ def render_slide(slide, base, cfg):
     color = cfg['color']
     shadow = cfg['shadow']
     use_pm = cfg['use_pilmoji']
+    emoji_dy = cfg['emoji_dy']
 
-    # Pilmoji работает со стандартными настройками, никаких ручных смещений
-    pmj_context = Pilmoji(img) if (use_pm and HAS_PILMOJI) else None
+    pmj_context = Pilmoji(img, emoji_position_offset=(0, emoji_dy)) if (use_pm and HAS_PILMOJI) else None
 
     with ExitStack() as stack:
         if pmj_context:
@@ -237,7 +210,6 @@ def render_slide(slide, base, cfg):
 
     return img.convert("RGB")
 
-
 def _draw_wm(img, wm, default_color, use_pm, pmj_context, draw):
     wf = wm['font']
     if not wf:
@@ -249,7 +221,8 @@ def _draw_wm(img, wm, default_color, use_pm, pmj_context, draw):
 
     tw, th = 0, 0
     if text:
-        tw = get_advance(draw, text, wf)
+        clean_text = text.replace('\uFE0F', '').replace('\uFE0E', '')
+        tw = get_advance(draw, clean_text, wf)
         bb = draw.textbbox((0, 0), strip_markers(text), font=wf)
         th = bb[3] - bb[1]
 
@@ -278,16 +251,12 @@ def _draw_wm(img, wm, default_color, use_pm, pmj_context, draw):
     if text:
         ty = int(wy + (bh - th) // 2)
         fill = (*default_color[:3], alpha)
+        clean_text = text.replace('\uFE0F', '').replace('\uFE0E', '')
         if pmj_context:
-            pmj_context.text((cx, ty), text, font=wf, fill=fill)
+            pmj_context.text((cx, ty), clean_text, font=wf, fill=fill)
         else:
-            clean_text = text.replace('\uFE0F', '')
             draw.text((cx, ty), clean_text, font=wf, fill=fill)
 
-
-# ─────────────────────────────────────────────
-# WATERMARK UI
-# ─────────────────────────────────────────────
 def wm_block(label, prefix):
     with st.container(border=True):
         st.markdown(f"### {label}")
@@ -321,13 +290,8 @@ def wm_block(label, prefix):
         'ox': ox, 'oy': oy, 'font': None,
     }
 
-
-# ─────────────────────────────────────────────
-# LAYOUT
-# ─────────────────────────────────────────────
 left_col, right_col = st.columns([5, 4], gap="large")
 
-# ═══════════════ LEFT ═══════════════
 with left_col:
     with st.container(height=SCROLL_H):
 
@@ -356,6 +320,7 @@ with left_col:
                 text_size = st.slider("Текст", 20, 80, 40, step=2)
             
             space_gap = st.slider("Отступ заголовок → текст", 10, 250, 100, step=10)
+            emoji_dy = st.slider("Высота эмодзи", -40, 40, -15, step=1)
 
         with st.container(border=True):
             st.markdown("### Межстрочный интервал")
@@ -380,7 +345,7 @@ with left_col:
 
         with st.container(border=True):
             st.markdown("### Контент")
-            st.caption("Текст обновится при клике вне этого поля (защита от лагов).")
+            st.caption("Кликни мимо поля, чтобы применить текст")
             default_text = """ЗАГОЛОВОК 1
 Текст первого слайда. ⚡
 
@@ -395,7 +360,6 @@ with left_col:
 Текст третьего слайда."""
             text_input = st.text_area("c", value=default_text, height=220, label_visibility="collapsed")
 
-# ═══════════════ RIGHT ═══════════════
 with right_col:
     with st.container(height=SCROLL_H):
 
@@ -406,7 +370,7 @@ with right_col:
             bf = ImageFont.truetype(HEADER_FONT_PATH, text_size)
         except IOError:
             fonts_ok = False
-            st.error("Шрифты не найдены – GoogleSans-Bold.ttf / GoogleSans-Regular.ttf в ./fonts/")
+            st.error("Шрифты не найдены")
 
         if fonts_ok:
             try:
@@ -417,7 +381,7 @@ with right_col:
 
         use_pilmoji = HAS_PILMOJI
         if not HAS_PILMOJI:
-            st.caption("⚡ `pip install pilmoji` – для эмодзи")
+            st.caption("Установи pilmoji для эмодзи")
 
         cfg = {
             'hf': hf if fonts_ok else None,
@@ -432,18 +396,17 @@ with right_col:
             'h_spacing': h_spacing,
             't_spacing': t_spacing,
             'use_pilmoji': use_pilmoji,
+            'emoji_dy': emoji_dy,
             'wms': [wm1, wm2],
         }
 
         slides_data = parse_slides(text_input) if text_input.strip() else []
 
-        # ── PREVIEW (Уменьшено на 5% с помощью колонок) ──
         st.write("") 
         if uploaded_bgs and fonts_ok and slides_data:
             bg = prepare_bg_cached(uploaded_bgs[0].getvalue(), bg_darken, FW, FH)
             preview = render_slide(slides_data[0], bg, cfg)
             
-            # Микро-сужение превью (2.5% пустоты по бокам = 5% сужение)
             pad_left, img_col, pad_right = st.columns([0.025, 0.95, 0.025])
             with img_col:
                 st.image(preview, use_container_width=True)
@@ -452,11 +415,9 @@ with right_col:
         elif not slides_data:
             st.info("← Добавь контент")
 
-        # ── КНОПКА ГЕНЕРАЦИИ (ТЕПЕРЬ В САМОМ НИЗУ) ──
-        st.write("---") # Визуальный разделитель для красоты
+        st.write("---") 
         btn = st.button("🚀 Сгенерировать карусель", type="primary", use_container_width=True)
 
-        # ── ЛОГИКА ГЕНЕРАЦИИ ──
         if btn:
             if not uploaded_bgs:
                 st.error("Загрузи фоны!")
