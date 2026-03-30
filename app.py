@@ -111,15 +111,26 @@ def get_advance(d, text, font):
 
 
 def wrap_pixels(text, font, max_w, draw):
-    # Вместо простого .split() используем регулярку, 
-    # чтобы не разбивать пробелами то, что находится внутри звездочек
-    words = re.findall(r'\*[^*]+\*|\S+', text)
+    # 1. МАГИЯ: Распределяем жирность на каждое слово отдельно.
+    # Это позволит программе переносить жирные слова по одному, 
+    # не ломая контейнер и сохраняя стиль.
+    def distribute_bold(match):
+        content = match.group(1)
+        return ' '.join([f'*{w}*' for w in content.split()])
+    
+    # Превращаем "*текст из слов*" в "*текст* *из* *слов*"
+    processed_text = re.sub(r'\*([^*]+)\*', distribute_bold, text)
+    
+    # 2. Теперь стандартно разбиваем по пробелам. 
+    # Теперь ни одно "слово" не будет шире экрана.
+    words = processed_text.split()
     
     if not words:
         return ['']
     lines, cur = [], [words[0]]
     for w in words[1:]:
         test = strip_markers(' '.join(cur + [w]))
+        # Используем наш быстрый замер ширины
         tw = get_advance(draw, test.replace('\uFE0F', ''), font)
         if tw <= max_w:
             cur.append(w)
