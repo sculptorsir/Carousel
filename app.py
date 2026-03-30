@@ -3,9 +3,8 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import zipfile
 import re
-import unicodedata
 
-# ── pilmoji ──
+# ── pilmoji for emoji ──
 try:
     from pilmoji import Pilmoji
     HAS_PILMOJI = True
@@ -20,7 +19,6 @@ BODY_FONT_PATH = './fonts/GoogleSans-Regular.ttf'
 FW, FH = 1080, 1350
 ACCENT = "#3B82F6"
 ACCENT2 = "#2563EB"
-SCROLL_H = 780  # px – height of both scrollable panels
 
 # ─────────────────────────────────────────────
 # CSS
@@ -29,10 +27,15 @@ st.set_page_config(page_title="Carousel Gen", page_icon="⬛", layout="wide")
 
 st.markdown(f"""
 <style>
+    /* kill page-level scroll – only left panel scrolls */
     .block-container {{
-        padding-top: 0.6rem !important;
+        padding-top: 0.8rem !important;
         padding-bottom: 0 !important;
+        max-height: 100vh;
+        overflow: hidden;
     }}
+
+    /* buttons */
     .stButton > button[kind="primary"],
     .stDownloadButton > button[kind="primary"],
     button[kind="primary"] {{
@@ -48,80 +51,38 @@ st.markdown(f"""
         background-color: {ACCENT2} !important;
         border-color: {ACCENT2} !important;
     }}
+
+    /* section headers */
     h3 {{
-        font-size: 0.88rem !important;
-        margin-top: 0.3rem !important;
-        margin-bottom: 0.15rem !important;
+        font-size: 0.9rem !important;
+        margin-top: 0.4rem !important;
+        margin-bottom: 0.2rem !important;
         color: {ACCENT} !important;
         letter-spacing: 0.03em;
         text-transform: uppercase;
     }}
+
+    /* containers */
     div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"] {{
         border-radius: 12px !important;
-        border-color: rgba(59,130,246,0.15) !important;
+        border-color: rgba(59, 130, 246, 0.15) !important;
     }}
+
     .stSlider label {{ font-size: 0.8rem; }}
     .stCaption {{ font-size: 0.72rem !important; opacity: 0.65; }}
+
+    /* hide default header */
     header[data-testid="stHeader"] {{ display: none; }}
 </style>
 """, unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
-# TEXT UTILS
+# UTILS
 # ─────────────────────────────────────────────
 def hex_to_rgb(h):
     h = h.lstrip('#')
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-
-
-def is_emoji_char(ch):
-    cat = unicodedata.category(ch)
-    cp = ord(ch)
-    if cat in ('So', 'Sk'):
-        return True
-    if cp in (0x200D, 0xFE0F, 0xFE0E, 0x20E3):
-        return True
-    if 0x1F000 <= cp <= 0x1FFFF:
-        return True
-    if 0x2600 <= cp <= 0x27BF:
-        return True
-    if 0x2300 <= cp <= 0x23FF:
-        return True
-    if 0x2B05 <= cp <= 0x2B55:
-        return True
-    if 0xE0020 <= cp <= 0xE007F:
-        return True
-    return False
-
-
-def split_text_and_emoji(text):
-    """Split text into runs of (string, is_emoji)."""
-    runs = []
-    buf = ''
-    in_emoji = False
-    for ch in text:
-        ise = is_emoji_char(ch)
-        if ise != in_emoji and buf:
-            runs.append((buf, in_emoji))
-            buf = ''
-        in_emoji = ise
-        buf += ch
-    if buf:
-        runs.append((buf, in_emoji))
-    return runs
-
-
-def measure_text(text, font, draw, font_size):
-    """Measure text width accounting for emoji (approx emoji = font_size)."""
-    runs = split_text_and_emoji(strip_markers(text))
-    w = 0
-    for run_text, ise in runs:
-        if ise:
-            w += font_size * len([c for c in run_text if is_emoji_char(c)])
-        else:
-            w += draw.textlength(run_text, font=font)
-    return w
 
 
 def parse_bold(text):
@@ -139,16 +100,30 @@ def strip_markers(text):
     return text.replace('*', '')
 
 
-def wrap_pixels(text, font, max_w, draw, font_size):
-    """Word-wrap by pixel width. Never breaks words. Emoji-aware."""
+def get_advance(d, text, font):
+    """Кастомный просчет ширины с учетом пробелов и эмодзи"""
+    # Заменяем обычные пробелы на неразрывные, чтобы библиотека их не "съедала"
+    measure_text = text.replace(' ', '\u00A0')
+    adv = d.textlength(measure_text, font=font)
+    
+    # Компенсируем ширину для эмодзи (молнии, звездочки и т.д.)
+    for c in text:
+        if ord(c) >= 0x2600:
+            cw = d.textlength(c, font=font)
+            if cw < font.size * 0.6:
+                adv += (font.size * 1.15) - cw
+    return adv
+
+
+def wrap_pixels(text, font, max_w, draw):
+    """Word-wrap by pixel width. Never breaks words."""
     words = text.split()
     if not words:
         return ['']
-    lines = []
-    cur = [words[0]]
+    lines, cur = [], [words[0]]
     for w in words[1:]:
-        test = ' '.join(cur + [w])
-        tw = measure_text(test, font, draw, font_size)
+        test = strip_markers(' '.join(cur + [w]))
+        tw = get_advance(draw, test, font)
         if tw <= max_w:
             cur.append(w)
         else:
@@ -158,50 +133,27 @@ def wrap_pixels(text, font, max_w, draw, font_size):
     return lines
 
 
-def draw_rich_line(target, x, y, text, f_reg, f_bold, color, shadow, font_size):
-    """Draw one line with *bold* and emoji via pilmoji."""
+def draw_rich_line(target, x, y, text, f_reg, f_bold, color, shadow, use_pilmoji):
+    """Draw one line with *bold* and emoji support."""
     segs = parse_bold(text)
+    cx = x
+    d = ImageDraw.Draw(target)
 
-    if HAS_PILMOJI:
-        # first pass: shadow
-        if shadow:
-            with Pilmoji(target) as pmj:
-                cx = x + 3
-                for txt, bold in segs:
-                    font = f_bold if bold else f_reg
-                    pmj.text((cx, y + 3), txt, font=font, fill=(0, 0, 0, 128))
-                    d = ImageDraw.Draw(target)
-                    cx += _seg_width(txt, font, d, font_size)
-        # second pass: main
+    if use_pilmoji and HAS_PILMOJI:
         with Pilmoji(target) as pmj:
-            cx = x
             for txt, bold in segs:
                 font = f_bold if bold else f_reg
+                if shadow:
+                    pmj.text((cx + 3, y + 3), txt, font=font, fill=(0, 0, 0, 128))
                 pmj.text((cx, y), txt, font=font, fill=color)
-                d = ImageDraw.Draw(target)
-                cx += _seg_width(txt, font, d, font_size)
+                cx += get_advance(d, txt, font)
     else:
-        d = ImageDraw.Draw(target)
-        cx = x
         for txt, bold in segs:
             font = f_bold if bold else f_reg
             if shadow:
                 d.text((cx + 3, y + 3), txt, font=font, fill=(0, 0, 0, 128))
             d.text((cx, y), txt, font=font, fill=color)
-            cx += d.textlength(txt, font=font)
-
-
-def _seg_width(txt, font, draw, font_size):
-    """Measure segment width, accounting for emoji."""
-    runs = split_text_and_emoji(txt)
-    w = 0
-    for run_text, ise in runs:
-        if ise:
-            # each emoji char ~ font_size in width from pilmoji
-            w += font_size * len([c for c in run_text if is_emoji_char(c)])
-        else:
-            w += draw.textlength(run_text, font=font)
-    return w
+            cx += get_advance(d, txt, font)
 
 
 # ─────────────────────────────────────────────
@@ -245,64 +197,68 @@ def render_slide(slide, base, cfg):
     img = base.copy()
     draw = ImageDraw.Draw(img)
 
-    hf, tf, bf = cfg['hf'], cfg['tf'], cfg['bf']
+    hf = cfg['hf']
+    tf = cfg['tf']
+    bf = cfg['bf']
     color = cfg['color']
     shadow = cfg['shadow']
-    hs, ts = cfg['hs'], cfg['ts']
+    use_pm = cfg['use_pilmoji']
 
-    h_lines = wrap_pixels(slide['title'], hf, cfg['hw'], draw, hs)
+    # header lines
+    h_lines = wrap_pixels(slide['title'], hf, cfg['hw'], draw)
 
+    # body lines with paragraph support
     body_lines = []
     for para in slide['text'].split('\n'):
         para = para.strip()
         if para:
-            body_lines.extend(wrap_pixels(para, tf, cfg['bw'], draw, ts))
+            body_lines.extend(wrap_pixels(para, tf, cfg['bw'], draw))
         else:
             body_lines.append('')
 
-    title_lh = int(hs * cfg['h_spacing'])
-    text_lh = int(ts * cfg['t_spacing'])
+    title_lh = int(cfg['hs'] * cfg['h_spacing'])
+    text_lh = int(cfg['ts'] * cfg['t_spacing'])
 
     tx, ty = cfg['tx'], cfg['ty']
     cur_y = ty
 
+    # draw header
     for line in h_lines:
-        draw_rich_line(img, tx, cur_y, line, hf, hf, color, shadow, hs)
+        draw_rich_line(img, tx, cur_y, line, hf, hf, color, shadow, use_pm)
         cur_y += title_lh
 
     cur_y += cfg['gap']
 
+    # draw body
     for line in body_lines:
         if line:
-            draw_rich_line(img, tx, cur_y, line, tf, bf, color, shadow, ts)
+            draw_rich_line(img, tx, cur_y, line, tf, bf, color, shadow, use_pm)
         cur_y += text_lh
 
+    # watermarks
     for wm in cfg.get('wms', []):
         if wm and (wm['text'] or wm['avatar']):
-            _draw_wm(img, wm, color)
+            _draw_wm(img, wm, color, use_pm)
 
     return img.convert("RGB")
 
 
-def _draw_wm(img, wm, default_color):
+def _draw_wm(img, wm, default_color, use_pm):
     draw = ImageDraw.Draw(img)
     wf = wm['font']
-    if not wf:
-        return
     alpha = wm['alpha']
     text = wm['text']
     av = wm['avatar']
     av_sz = wm['av_size']
-    fsz = wm['font_size']
 
     tw, th = 0, 0
     if text:
-        bb = draw.textbbox((0, 0), strip_markers(text), font=wf)
-        tw, th = bb[2] - bb[0], bb[3] - bb[1]
-        # account for emoji in text
-        tw = _seg_width(text, wf, draw, fsz)
+        # Для вотермарки тоже используем get_advance для ширины
+        tw = get_advance(draw, text, wf)
+        bb = draw.textbbox((0, 0), text, font=wf)
+        th = bb[3] - bb[1]
 
-    total_w = int(tw) + (av_sz + 12 if av else 0)
+    total_w = tw + (av_sz + 12 if av else 0)
     bh = max(th, av_sz if av else 0)
     wy = FH - 80 + wm['oy']
 
@@ -325,17 +281,18 @@ def _draw_wm(img, wm, default_color):
         cx += av_sz + 12
 
     if text:
+        draw2 = ImageDraw.Draw(img)
         ty = int(wy + (bh - th) // 2)
         fill = (*default_color[:3], alpha)
-        if HAS_PILMOJI:
+        if use_pm and HAS_PILMOJI:
             with Pilmoji(img) as pmj:
                 pmj.text((cx, ty), text, font=wf, fill=fill)
         else:
-            ImageDraw.Draw(img).text((cx, ty), text, font=wf, fill=fill)
+            draw2.text((cx, ty), text, font=wf, fill=fill)
 
 
 # ─────────────────────────────────────────────
-# WATERMARK UI
+# WATERMARK UI (reusable)
 # ─────────────────────────────────────────────
 def wm_block(label, prefix):
     with st.container(border=True):
@@ -376,10 +333,14 @@ def wm_block(label, prefix):
 # ─────────────────────────────────────────────
 left_col, right_col = st.columns([5, 4], gap="large")
 
-# ═══════════════ LEFT ═══════════════
+# ═══════════════════════════════════════════
+# LEFT – scrollable settings
+# ═══════════════════════════════════════════
 with left_col:
-    with st.container(height=SCROLL_H):
+    # Контейнер для настроек
+    with st.container(height=800):
 
+        # ── ФОНЫ ──
         with st.container(border=True):
             st.markdown("### Фоны")
             uploaded_bgs = st.file_uploader(
@@ -388,9 +349,13 @@ with left_col:
             )
             bg_darken = st.slider("Затемнение", 0, 100, 0, format="%d%%")
 
+        # ── НИКНЕЙМ 1 ──
         wm1 = wm_block("Никнейм 1", "w1")
+
+        # ── НИКНЕЙМ 2 ──
         wm2 = wm_block("Никнейм 2", "w2")
 
+        # ── ТИПОГРАФИКА ──
         with st.container(border=True):
             st.markdown("### Типографика")
             tc1, tc2 = st.columns(2)
@@ -405,14 +370,16 @@ with left_col:
                 text_size = st.slider("Текст", 20, 80, 40, step=2)
             space_gap = st.slider("Отступ заголовок → текст", 10, 250, 100, step=10)
 
+        # ── МЕЖСТРОЧНЫЙ ──
         with st.container(border=True):
             st.markdown("### Межстрочный интервал")
             lc1, lc2 = st.columns(2)
             with lc1:
-                h_spacing = st.slider("Заголовок", 1.0, 2.5, 1.25, step=0.05, key="hsp")
+                h_spacing = st.slider("Заголовок", 1.0, 2.5, 1.25, step=0.05, key="hs_sp")
             with lc2:
-                t_spacing = st.slider("Текст", 1.0, 3.0, 1.55, step=0.05, key="tsp")
+                t_spacing = st.slider("Текст", 1.0, 3.0, 1.55, step=0.05, key="ts_sp")
 
+        # ── КОНТЕЙНЕР ──
         with st.container(border=True):
             st.markdown("### Контейнер текста")
             kc1, kc2 = st.columns(2)
@@ -426,11 +393,12 @@ with left_col:
             with pc2:
                 text_y = st.slider("Позиция Y", 50, 1100, 350, step=10)
 
+        # ── КОНТЕНТ ──
         with st.container(border=True):
             st.markdown("### Контент")
-            st.caption("Слайды: `---` · 1-я строка = заголовок · `*жирный*` · пустая строка = абзац")
+            st.caption("Слайды: `---` · первая строка = заголовок · `*жирный*` · пустая строка = абзац")
             default_text = """ЗАГОЛОВОК 1
-Текст первого слайда.
+Текст первого слайда. ⚡
 
 Второй абзац с *жирным* словом.
 ---
@@ -441,92 +409,101 @@ with left_col:
 Текст третьего слайда."""
             text_input = st.text_area("c", value=default_text, height=220, label_visibility="collapsed")
 
-# ═══════════════ RIGHT ═══════════════
+
+# ═══════════════════════════════════════════
+# RIGHT – fixed preview + generate
+# ═══════════════════════════════════════════
 with right_col:
-    with st.container(height=SCROLL_H):
 
-        fonts_ok = True
+    fonts_ok = True
+    try:
+        hf = ImageFont.truetype(HEADER_FONT_PATH, header_size)
+        tf = ImageFont.truetype(BODY_FONT_PATH, text_size)
+        bf = ImageFont.truetype(HEADER_FONT_PATH, text_size)  # bold body
+    except IOError:
+        fonts_ok = False
+        st.error("Шрифты не найдены – нужны GoogleSans-Bold.ttf и GoogleSans-Regular.ttf в ./fonts/")
+
+    if fonts_ok:
         try:
-            hf = ImageFont.truetype(HEADER_FONT_PATH, header_size)
-            tf = ImageFont.truetype(BODY_FONT_PATH, text_size)
-            bf = ImageFont.truetype(HEADER_FONT_PATH, text_size)
+            wm1['font'] = ImageFont.truetype(BODY_FONT_PATH, wm1['font_size'])
+            wm2['font'] = ImageFont.truetype(BODY_FONT_PATH, wm2['font_size'])
         except IOError:
-            fonts_ok = False
-            st.error("Шрифты не найдены – GoogleSans-Bold.ttf / GoogleSans-Regular.ttf в ./fonts/")
+            pass
 
-        if fonts_ok:
-            try:
-                wm1['font'] = ImageFont.truetype(BODY_FONT_PATH, wm1['font_size'])
-                wm2['font'] = ImageFont.truetype(BODY_FONT_PATH, wm2['font_size'])
-            except IOError:
-                pass
+    use_pilmoji = HAS_PILMOJI
+    if not HAS_PILMOJI:
+        st.caption("⚡ `pip install pilmoji` – для полноценных эмодзи")
 
-        if not HAS_PILMOJI:
-            st.caption("⚡ `pip install pilmoji` – для эмодзи")
+    cfg = {
+        'hf': hf if fonts_ok else None,
+        'tf': tf if fonts_ok else None,
+        'bf': bf if fonts_ok else None,
+        'ef': None,
+        'color': hex_to_rgb(text_color_hex),
+        'hs': header_size, 'ts': text_size,
+        'hw': header_w, 'bw': body_w,
+        'tx': text_x, 'ty': text_y,
+        'gap': space_gap,
+        'shadow': add_shadow,
+        'h_spacing': h_spacing,
+        't_spacing': t_spacing,
+        'use_pilmoji': use_pilmoji,
+        'wms': [wm1, wm2],
+    }
 
-        cfg = {
-            'hf': hf if fonts_ok else None,
-            'tf': tf if fonts_ok else None,
-            'bf': bf if fonts_ok else None,
-            'color': hex_to_rgb(text_color_hex),
-            'hs': header_size, 'ts': text_size,
-            'hw': header_w, 'bw': body_w,
-            'tx': text_x, 'ty': text_y,
-            'gap': space_gap,
-            'shadow': add_shadow,
-            'h_spacing': h_spacing,
-            't_spacing': t_spacing,
-            'wms': [wm1, wm2],
-        }
+    slides_data = parse_slides(text_input) if text_input.strip() else []
 
-        slides_data = parse_slides(text_input) if text_input.strip() else []
+    # ── PREVIEW (Скроллируемый контейнер для превью) ──
+    with st.container(height=550):
+        st.markdown("### Превью")
+        if uploaded_bgs and fonts_ok and slides_data:
+            bg = prepare_bg(uploaded_bgs[0], bg_darken)
+            preview = render_slide(slides_data[0], bg, cfg)
+            st.image(preview, use_container_width=True)
+        elif not uploaded_bgs:
+            st.info("← Загрузи фон")
+        elif not slides_data:
+            st.info("← Добавь контент")
 
-        # ── PREVIEW ──
-        with st.container(border=True):
-            st.markdown("### Превью")
-            if uploaded_bgs and fonts_ok and slides_data:
-                bg = prepare_bg(uploaded_bgs[0], bg_darken)
-                preview = render_slide(slides_data[0], bg, cfg)
-                st.image(preview, width=340)
-            elif not uploaded_bgs:
-                st.info("← Загрузи фон")
-            elif not slides_data:
-                st.info("← Добавь контент")
+    # ── GENERATE BUTTON (Зафиксирована вне контейнера скролла) ──
+    st.write("") 
+    btn = st.button("Сгенерировать карусель", type="primary", use_container_width=True)
 
-        # ── GENERATE ──
-        btn = st.button("Сгенерировать карусель", type="primary", use_container_width=True)
+    if btn:
+        if not uploaded_bgs:
+            st.error("Загрузи фоны!")
+        elif not slides_data:
+            st.error("Добавь контент!")
+        elif not fonts_ok:
+            st.error("Шрифты не найдены!")
+        else:
+            with st.spinner("Генерация..."):
+                images = []
+                for i, slide in enumerate(slides_data):
+                    bg = prepare_bg(uploaded_bgs[i % len(uploaded_bgs)], bg_darken)
+                    images.append(render_slide(slide, bg, cfg))
 
-        if btn:
-            if not uploaded_bgs:
-                st.error("Загрузи фоны!")
-            elif not slides_data:
-                st.error("Добавь контент!")
-            elif not fonts_ok:
-                st.error("Шрифты!")
-            else:
-                with st.spinner("Генерация..."):
-                    images = []
-                    for i, slide in enumerate(slides_data):
-                        bg = prepare_bg(uploaded_bgs[i % len(uploaded_bgs)], bg_darken)
-                        images.append(render_slide(slide, bg, cfg))
-
-                st.success(f"Готово – {len(images)} слайд(ов)")
+            st.success(f"Готово – {len(images)} слайд(ов)")
+            
+            # Результаты тоже помещаем в контейнер, чтобы не ломать верстку
+            with st.container(height=600):
                 cols = st.columns(2)
                 for idx, im in enumerate(images):
-                    cols[idx % 2].image(im, caption=f"Слайд {idx+1}", use_container_width=True)
+                    cols[idx % 2].image(im, caption=f"Слайд {idx + 1}", use_container_width=True)
 
-                buf = io.BytesIO()
-                with zipfile.ZipFile(buf, "a", zipfile.ZIP_DEFLATED) as zf:
-                    for idx, im in enumerate(images):
-                        b = io.BytesIO()
-                        im.save(b, format='JPEG', quality=95)
-                        zf.writestr(f"slide_{idx+1}.jpg", b.getvalue())
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "a", zipfile.ZIP_DEFLATED) as zf:
+                for idx, im in enumerate(images):
+                    b = io.BytesIO()
+                    im.save(b, format='JPEG', quality=95)
+                    zf.writestr(f"slide_{idx + 1}.jpg", b.getvalue())
 
-                st.download_button(
-                    "Скачать карусель (ZIP)",
-                    data=buf.getvalue(),
-                    file_name="carousel.zip",
-                    mime="application/zip",
-                    type="primary",
-                    use_container_width=True,
-                )
+            st.download_button(
+                "Скачать карусель (ZIP)",
+                data=buf.getvalue(),
+                file_name="carousel.zip",
+                mime="application/zip",
+                type="primary",
+                use_container_width=True,
+            )
