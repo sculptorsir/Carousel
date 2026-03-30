@@ -5,12 +5,16 @@ import zipfile
 import re
 from contextlib import ExitStack
 
+# ── pilmoji ──
 try:
     from pilmoji import Pilmoji
     HAS_PILMOJI = True
 except ImportError:
     HAS_PILMOJI = False
 
+# ─────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────
 HEADER_FONT_PATH = './fonts/GoogleSans-Bold.ttf'
 BODY_FONT_PATH = './fonts/GoogleSans-Regular.ttf'
 FW, FH = 1080, 1350
@@ -18,6 +22,9 @@ ACCENT = "#3B82F6"
 ACCENT2 = "#2563EB"
 SCROLL_H = 780
 
+# ─────────────────────────────────────────────
+# CSS
+# ─────────────────────────────────────────────
 st.set_page_config(page_title="Carousel Gen", page_icon="⬛", layout="wide")
 
 st.markdown(f"""
@@ -59,9 +66,14 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
+
+# ─────────────────────────────────────────────
+# TEXT UTILS
+# ─────────────────────────────────────────────
 def hex_to_rgb(h):
     h = h.lstrip('#')
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
 
 def parse_bold(text):
     parts = re.split(r'(\*[^*]+\*)', text)
@@ -73,8 +85,10 @@ def parse_bold(text):
             segs.append((p, False))
     return segs
 
+
 def strip_markers(text):
     return text.replace('*', '')
+
 
 def get_advance(d, text, font):
     clean = text.replace('\uFE0F', '').replace('\uFE0E', '')
@@ -93,6 +107,7 @@ def get_advance(d, text, font):
         adv += d.textlength(buf.replace(' ', '\u00A0'), font=font)
     return adv
 
+
 def wrap_pixels(text, font, max_w, draw):
     words = text.split()
     if not words:
@@ -108,6 +123,7 @@ def wrap_pixels(text, font, max_w, draw):
             cur = [w]
     lines.append(' '.join(cur))
     return lines
+
 
 def draw_rich_line(target, x, y, text, f_reg, f_bold, color, shadow, use_pilmoji, pmj_context):
     segs = parse_bold(text)
@@ -128,6 +144,10 @@ def draw_rich_line(target, x, y, text, f_reg, f_bold, color, shadow, use_pilmoji
             
         cx += get_advance(d, clean_txt, font)
 
+
+# ─────────────────────────────────────────────
+# CORE LOGIC
+# ─────────────────────────────────────────────
 def parse_slides(content):
     blocks = content.split('---')
     slides = []
@@ -140,6 +160,7 @@ def parse_slides(content):
         body = '\n'.join(lines[1:]).strip()
         slides.append({"title": title, "text": body})
     return slides
+
 
 @st.cache_data(show_spinner=False)
 def prepare_bg_cached(file_bytes, darken, final_w, final_h):
@@ -160,6 +181,7 @@ def prepare_bg_cached(file_bytes, darken, final_w, final_h):
         a = int(255 * darken / 100)
         base.alpha_composite(Image.new('RGBA', (final_w, final_h), (0, 0, 0, a)))
     return base
+
 
 def render_slide(slide, base, cfg):
     img = base.copy()
@@ -210,6 +232,7 @@ def render_slide(slide, base, cfg):
 
     return img.convert("RGB")
 
+
 def _draw_wm(img, wm, default_color, use_pm, pmj_context, draw):
     wf = wm['font']
     if not wf:
@@ -257,6 +280,7 @@ def _draw_wm(img, wm, default_color, use_pm, pmj_context, draw):
         else:
             draw.text((cx, ty), clean_text, font=wf, fill=fill)
 
+
 def wm_block(label, prefix):
     with st.container(border=True):
         st.markdown(f"### {label}")
@@ -290,6 +314,10 @@ def wm_block(label, prefix):
         'ox': ox, 'oy': oy, 'font': None,
     }
 
+
+# ─────────────────────────────────────────────
+# LAYOUT
+# ─────────────────────────────────────────────
 left_col, right_col = st.columns([5, 4], gap="large")
 
 with left_col:
@@ -341,7 +369,8 @@ with left_col:
             with pc1:
                 text_x = st.slider("Позиция X", 20, 500, 90, step=5)
             with pc2:
-                text_y = st.slider("Позиция Y", 50, 1100, 350, step=10)
+                # ЗНАЧЕНИЕ ПО УМОЛЧАНИЮ ИЗМЕНЕНО НА 200
+                text_y = st.slider("Позиция Y", 50, 1100, 200, step=10)
 
         with st.container(border=True):
             st.markdown("### Контент")
@@ -359,6 +388,7 @@ with left_col:
 ЗАГОЛОВОК 3
 Текст третьего слайда."""
             text_input = st.text_area("c", value=default_text, height=220, label_visibility="collapsed")
+
 
 with right_col:
     with st.container(height=SCROLL_H):
@@ -438,12 +468,13 @@ with right_col:
                 for idx, im in enumerate(images):
                     cols[idx % 2].image(im, caption=f"Слайд {idx+1}", use_container_width=True)
 
+                # ИЗМЕНЕНО НА ФОРМАТ PNG ДЛЯ ИДЕАЛЬНОГО КАЧЕСТВА
                 buf = io.BytesIO()
                 with zipfile.ZipFile(buf, "a", zipfile.ZIP_DEFLATED) as zf:
                     for idx, im in enumerate(images):
                         b = io.BytesIO()
-                        im.save(b, format='JPEG', quality=95)
-                        zf.writestr(f"slide_{idx+1}.jpg", b.getvalue())
+                        im.save(b, format='PNG')
+                        zf.writestr(f"slide_{idx+1}.png", b.getvalue())
 
                 st.download_button(
                     "Скачать карусель (ZIP)",
