@@ -3,6 +3,7 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import zipfile
 import re
+from contextlib import ExitStack
 
 # ── pilmoji ──
 try:
@@ -67,7 +68,7 @@ st.markdown(f"""
 
 
 # ─────────────────────────────────────────────
-# TEXT UTILS (Мой движок эмодзи)
+# TEXT UTILS (Ультимативный рендеринг)
 # ─────────────────────────────────────────────
 def hex_to_rgb(h):
     h = h.lstrip('#')
@@ -89,27 +90,25 @@ def strip_markers(text):
     return text.replace('*', '')
 
 
-def get_advance(d, text, font):
-    """Кастомный просчет ширины с учетом пробелов и эмодзи"""
-    measure_text = text.replace(' ', '\u00A0')
-    adv = d.textlength(measure_text, font=font)
-    for c in text:
-        if ord(c) >= 0x2600:
-            cw = d.textlength(c, font=font)
-            if cw < font.size * 0.6:
-                adv += (font.size * 1.15) - cw
-    return adv
-
-
-def wrap_pixels(text, font, max_w, draw):
-    """Word-wrap by pixel width. Never breaks words."""
+def wrap_pixels(text, font, max_w, draw, pmj=None):
+    """Интеллектуальный перенос строк с точным учетом ширины эмодзи"""
     words = text.split()
     if not words:
         return ['']
     lines, cur = [], [words[0]]
     for w in words[1:]:
         test = strip_markers(' '.join(cur + [w]))
-        tw = get_advance(draw, test, font)
+        # Удаляем невидимые символы, вызывающие квадратики
+        clean_test = test.replace('\uFE0F', '').replace('\uFE0E', '').replace(' ', '\u00A0')
+        tw = 0
+        if pmj:
+            try:
+                tw = pmj.getsize(clean_test, font=font)[0]
+            except AttributeError:
+                tw = draw.textlength(clean_test, font=font) + sum(1 for c in clean_test if ord(c) > 0x2000) * (font.size * 1.1)
+        else:
+            tw = draw.textlength(clean_test, font=font)
+            
         if tw <= max_w:
             cur.append(w)
         else:
@@ -119,27 +118,35 @@ def wrap_pixels(text, font, max_w, draw):
     return lines
 
 
-def draw_rich_line(target, x, y, text, f_reg, f_bold, color, shadow, use_pilmoji):
-    """Draw one line with *bold* and emoji support."""
+def draw_rich_line_pmj(target, x, y, text, f_reg, f_bold, color, shadow, draw, pmj):
+    """Отрисовка текста с тенями, болдом и идеально выровненными эмодзи"""
     segs = parse_bold(text)
     cx = x
-    d = ImageDraw.Draw(target)
 
-    if use_pilmoji and HAS_PILMOJI:
-        with Pilmoji(target) as pmj:
-            for txt, bold in segs:
-                font = f_bold if bold else f_reg
-                if shadow:
-                    pmj.text((cx + 3, y + 3), txt, font=font, fill=(0, 0, 0, 128))
-                pmj.text((cx, y), txt, font=font, fill=color)
-                cx += get_advance(d, txt, font)
-    else:
-        for txt, bold in segs:
-            font = f_bold if bold else f_reg
-            if shadow:
-                d.text((cx + 3, y + 3), txt, font=font, fill=(0, 0, 0, 128))
-            d.text((cx, y), txt, font=font, fill=color)
-            cx += get_advance(d, txt, font)
+    for txt, bold in segs:
+        # Убиваем системные артефакты юникода (те самые квадратики)
+        clean_txt = txt.replace('\uFE0F', '').replace('\uFE0E', '')
+        font = f_bold if bold else f_reg
+        
+        # 1. Тень
+        if shadow:
+            if pmj:
+                pmj.text((cx + 3, y + 3), clean_txt, font=font, fill=(0, 0, 0, 128))
+            else:
+                draw.text((cx + 3, y + 3), clean_txt, font=font, fill=(0, 0, 0, 128))
+        
+        # 2. Текст и точный расчет ширины
+        if pmj:
+            pmj.text((cx, y), clean_txt, font=font, fill=color)
+            try:
+                adv = pmj.getsize(clean_txt.replace(' ', '\u00A0'), font=font)[0]
+            except AttributeError:
+                adv = draw.textlength(clean_txt.replace(' ', '\u00A0'), font=font) + sum(1 for c in clean_txt if ord(c) > 0x2000) * (font.size * 1.1)
+        else:
+            draw.text((cx, y), clean_txt, font=font, fill=color)
+            adv = draw.textlength(clean_txt.replace(' ', '\u00A0'), font=font)
+            
+        cx += adv
 
 
 # ─────────────────────────────────────────────
@@ -190,42 +197,48 @@ def render_slide(slide, base, cfg):
     shadow = cfg['shadow']
     use_pm = cfg['use_pilmoji']
 
-    h_lines = wrap_pixels(slide['title'], hf, cfg['hw'], draw)
+    # Поднимаем эмодзи на 15% вверх, чтобы они не падали под строку
+    offset_y = -int(tf.size * 0.15) if tf else -6
+    pmj_context = Pilmoji(img, emoji_position_offset=(0, offset_y)) if (use_pm and HAS_PILMOJI) else None
 
-    body_lines = []
-    for para in slide['text'].split('\n'):
-        para = para.strip()
-        if para:
-            body_lines.extend(wrap_pixels(para, tf, cfg['bw'], draw))
-        else:
-            body_lines.append('')
+    with ExitStack() as stack:
+        pmj = stack.enter_context(pmj_context) if pmj_context else None
 
-    title_lh = int(cfg['hs'] * cfg['h_spacing'])
-    text_lh = int(cfg['ts'] * cfg['t_spacing'])
+        h_lines = wrap_pixels(slide['title'], hf, cfg['hw'], draw, pmj)
 
-    tx, ty = cfg['tx'], cfg['ty']
-    cur_y = ty
+        body_lines = []
+        for para in slide['text'].split('\n'):
+            para = para.strip()
+            if para:
+                body_lines.extend(wrap_pixels(para, tf, cfg['bw'], draw, pmj))
+            else:
+                body_lines.append('')
 
-    for line in h_lines:
-        draw_rich_line(img, tx, cur_y, line, hf, hf, color, shadow, use_pm)
-        cur_y += title_lh
+        title_lh = int(cfg['hs'] * cfg['h_spacing'])
+        text_lh = int(cfg['ts'] * cfg['t_spacing'])
 
-    cur_y += cfg['gap']
+        tx, ty = cfg['tx'], cfg['ty']
+        cur_y = ty
 
-    for line in body_lines:
-        if line:
-            draw_rich_line(img, tx, cur_y, line, tf, bf, color, shadow, use_pm)
-        cur_y += text_lh
+        for line in h_lines:
+            draw_rich_line_pmj(img, tx, cur_y, line, hf, hf, color, shadow, draw, pmj)
+            cur_y += title_lh
 
-    for wm in cfg.get('wms', []):
-        if wm and (wm['text'] or wm['avatar']):
-            _draw_wm(img, wm, color, use_pm)
+        cur_y += cfg['gap']
+
+        for line in body_lines:
+            if line:
+                draw_rich_line_pmj(img, tx, cur_y, line, tf, bf, color, shadow, draw, pmj)
+            cur_y += text_lh
+
+        for wm in cfg.get('wms', []):
+            if wm and (wm['text'] or wm['avatar']):
+                _draw_wm_pmj(img, wm, color, draw, pmj)
 
     return img.convert("RGB")
 
 
-def _draw_wm(img, wm, default_color, use_pm):
-    draw = ImageDraw.Draw(img)
+def _draw_wm_pmj(img, wm, default_color, draw, pmj):
     wf = wm['font']
     if not wf:
         return
@@ -236,7 +249,15 @@ def _draw_wm(img, wm, default_color, use_pm):
 
     tw, th = 0, 0
     if text:
-        tw = get_advance(draw, text, wf)
+        clean_text = text.replace('\uFE0F', '').replace('\uFE0E', '')
+        if pmj:
+            try:
+                tw = pmj.getsize(clean_text.replace(' ', '\u00A0'), font=wf)[0]
+            except AttributeError:
+                tw = draw.textlength(clean_text.replace(' ', '\u00A0'), font=wf) + sum(1 for c in clean_text if ord(c) > 0x2000) * (wf.size * 1.1)
+        else:
+            tw = draw.textlength(clean_text.replace(' ', '\u00A0'), font=wf)
+            
         bb = draw.textbbox((0, 0), strip_markers(text), font=wf)
         th = bb[3] - bb[1]
 
@@ -265,11 +286,11 @@ def _draw_wm(img, wm, default_color, use_pm):
     if text:
         ty = int(wy + (bh - th) // 2)
         fill = (*default_color[:3], alpha)
-        if use_pm and HAS_PILMOJI:
-            with Pilmoji(img) as pmj:
-                pmj.text((cx, ty), text, font=wf, fill=fill)
+        clean_text = text.replace('\uFE0F', '').replace('\uFE0E', '')
+        if pmj:
+            pmj.text((cx, ty), clean_text, font=wf, fill=fill)
         else:
-            ImageDraw.Draw(img).text((cx, ty), text, font=wf, fill=fill)
+            draw.text((cx, ty), clean_text, font=wf, fill=fill)
 
 
 # ─────────────────────────────────────────────
@@ -373,7 +394,7 @@ with left_col:
 Второй абзац с *жирным* словом.
 ---
 ЗАГОЛОВОК 2
-Текст второго слайда.
+Текст второго слайда. 🌟
 ---
 ЗАГОЛОВОК 3
 Текст третьего слайда."""
