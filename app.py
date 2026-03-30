@@ -11,10 +11,8 @@ HEADER_FONT_PATH = './fonts/GoogleSans-Bold.ttf'
 BODY_FONT_PATH = './fonts/GoogleSans-Regular.ttf'
 BOLD_FONT_PATH = './fonts/GoogleSans-Bold.ttf'
 EMOJI_FONT_PATHS = [
-    './fonts/NotoEmoji-Regular.ttf',
     './fonts/NotoColorEmoji.ttf',
     '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf',
-    '/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf',
 ]
 FW, FH = 1080, 1350
 ACCENT = "#3B82F6"
