@@ -68,7 +68,7 @@ st.markdown(f"""
 
 
 # ─────────────────────────────────────────────
-# TEXT UTILS (Быстрый движок)
+# TEXT UTILS (Идеальный монолитный движок)
 # ─────────────────────────────────────────────
 def hex_to_rgb(h):
     h = h.lstrip('#')
@@ -91,14 +91,24 @@ def strip_markers(text):
 
 
 def get_advance(d, text, font):
-    """Быстрый просчет ширины с учетом пробелов и эмодзи"""
-    measure_text = text.replace(' ', '\u00A0')
-    adv = d.textlength(measure_text, font=font)
-    for c in text:
-        if ord(c) >= 0x2600:
-            cw = d.textlength(c, font=font)
-            if cw < font.size * 0.6:
-                adv += (font.size * 1.15) - cw
+    """Точный просчет ширины с учетом пробелов и принудительным размером для ЛЮБЫХ эмодзи"""
+    clean = text.replace('\uFE0F', '').replace('\uFE0E', '')
+    adv = 0
+    buf = ""
+    for c in clean:
+        cp = ord(c)
+        # 0x2600 и выше охватывает почти все смайлы, иконки и символы интерфейса
+        if cp >= 0x2600 or cp in (0x23E9, 0x23EA): 
+            if buf:
+                # Рисуем накопленный обычный текст (заменяем пробелы на неразрывные для точности)
+                adv += d.textlength(buf.replace(' ', '\u00A0'), font=font)
+                buf = ""
+            # Добавляем стандартную ширину эмодзи (чуть больше размера шрифта)
+            adv += font.size * 1.15
+        else:
+            buf += c
+    if buf:
+        adv += d.textlength(buf.replace(' ', '\u00A0'), font=font)
     return adv
 
 
@@ -109,7 +119,7 @@ def wrap_pixels(text, font, max_w, draw):
     lines, cur = [], [words[0]]
     for w in words[1:]:
         test = strip_markers(' '.join(cur + [w]))
-        tw = get_advance(draw, test.replace('\uFE0F', ''), font)
+        tw = get_advance(draw, test, font)
         if tw <= max_w:
             cur.append(w)
         else:
@@ -124,22 +134,20 @@ def draw_rich_line(target, x, y, text, f_reg, f_bold, color, shadow, use_pilmoji
     cx = x
     d = ImageDraw.Draw(target)
 
-    if use_pilmoji and pmj_context:
-        for txt, bold in segs:
-            clean_txt = txt.replace('\uFE0F', '')
-            font = f_bold if bold else f_reg
+    for txt, bold in segs:
+        font = f_bold if bold else f_reg
+        # Если есть Pilmoji, отдаем ему текст AS IS (с \uFE0F), он сам найдет и заменит картинками
+        if use_pilmoji and pmj_context:
             if shadow:
-                pmj_context.text((cx + 3, y + 3), clean_txt, font=font, fill=(0, 0, 0, 128))
-            pmj_context.text((cx, y), clean_txt, font=font, fill=color)
-            cx += get_advance(d, clean_txt, font)
-    else:
-        for txt, bold in segs:
+                pmj_context.text((cx + 3, y + 3), txt, font=font, fill=(0, 0, 0, 128))
+            pmj_context.text((cx, y), txt, font=font, fill=color)
+        else:
             clean_txt = txt.replace('\uFE0F', '')
-            font = f_bold if bold else f_reg
             if shadow:
                 d.text((cx + 3, y + 3), clean_txt, font=font, fill=(0, 0, 0, 128))
             d.text((cx, y), clean_txt, font=font, fill=color)
-            cx += get_advance(d, clean_txt, font)
+            
+        cx += get_advance(d, txt, font)
 
 
 # ─────────────────────────────────────────────
@@ -161,7 +169,6 @@ def parse_slides(content):
 
 @st.cache_data(show_spinner=False)
 def prepare_bg_cached(file_bytes, darken, final_w, final_h):
-    """Жесткое кеширование фона для скорости"""
     img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
     w, h = img.size
     r = final_w / final_h
@@ -189,10 +196,9 @@ def render_slide(slide, base, cfg):
     color = cfg['color']
     shadow = cfg['shadow']
     use_pm = cfg['use_pilmoji']
-    emoji_dy = cfg['emoji_dy']
 
-    # Инициализация Pilmoji с точным смещением
-    pmj_context = Pilmoji(img, emoji_position_offset=(0, emoji_dy)) if (use_pm and HAS_PILMOJI) else None
+    # Pilmoji работает со стандартными настройками, никаких ручных смещений
+    pmj_context = Pilmoji(img) if (use_pm and HAS_PILMOJI) else None
 
     with ExitStack() as stack:
         if pmj_context:
@@ -243,8 +249,7 @@ def _draw_wm(img, wm, default_color, use_pm, pmj_context, draw):
 
     tw, th = 0, 0
     if text:
-        clean_text = text.replace('\uFE0F', '')
-        tw = get_advance(draw, clean_text, wf)
+        tw = get_advance(draw, text, wf)
         bb = draw.textbbox((0, 0), strip_markers(text), font=wf)
         th = bb[3] - bb[1]
 
@@ -273,10 +278,10 @@ def _draw_wm(img, wm, default_color, use_pm, pmj_context, draw):
     if text:
         ty = int(wy + (bh - th) // 2)
         fill = (*default_color[:3], alpha)
-        clean_text = text.replace('\uFE0F', '')
         if pmj_context:
-            pmj_context.text((cx, ty), clean_text, font=wf, fill=fill)
+            pmj_context.text((cx, ty), text, font=wf, fill=fill)
         else:
+            clean_text = text.replace('\uFE0F', '')
             draw.text((cx, ty), clean_text, font=wf, fill=fill)
 
 
@@ -351,9 +356,6 @@ with left_col:
                 text_size = st.slider("Текст", 20, 80, 40, step=2)
             
             space_gap = st.slider("Отступ заголовок → текст", 10, 250, 100, step=10)
-            
-            # НОВЫЙ ПОЛЗУНОК ДЛЯ ТОЧНОЙ НАСТРОЙКИ ЭМОДЗИ
-            emoji_dy = st.slider("Высота эмодзи (относительно текста)", -40, 40, -15, step=1, help="Сдвигает эмодзи вверх (минус) или вниз (плюс)")
 
         with st.container(border=True):
             st.markdown("### Межстрочный интервал")
@@ -430,27 +432,29 @@ with right_col:
             'h_spacing': h_spacing,
             't_spacing': t_spacing,
             'use_pilmoji': use_pilmoji,
-            'emoji_dy': emoji_dy,
             'wms': [wm1, wm2],
         }
 
         slides_data = parse_slides(text_input) if text_input.strip() else []
 
-        # ── GENERATE (КНОПКА ТЕПЕРЬ СВЕРХУ) ──
-        btn = st.button("🚀 Сгенерировать карусель", type="primary", use_container_width=True)
-
-        # ── PREVIEW (Нормальный размер) ──
-        st.write("") # Небольшой отступ
+        # ── PREVIEW (Уменьшено на 5% с помощью колонок) ──
+        st.write("") 
         if uploaded_bgs and fonts_ok and slides_data:
-            # Используем кешированную функцию
             bg = prepare_bg_cached(uploaded_bgs[0].getvalue(), bg_darken, FW, FH)
             preview = render_slide(slides_data[0], bg, cfg)
-            # Картинка на всю ширину контейнера
-            st.image(preview, use_container_width=True)
+            
+            # Микро-сужение превью (2.5% пустоты по бокам = 5% сужение)
+            pad_left, img_col, pad_right = st.columns([0.025, 0.95, 0.025])
+            with img_col:
+                st.image(preview, use_container_width=True)
         elif not uploaded_bgs:
             st.info("← Загрузи фон")
         elif not slides_data:
             st.info("← Добавь контент")
+
+        # ── КНОПКА ГЕНЕРАЦИИ (ТЕПЕРЬ В САМОМ НИЗУ) ──
+        st.write("---") # Визуальный разделитель для красоты
+        btn = st.button("🚀 Сгенерировать карусель", type="primary", use_container_width=True)
 
         # ── ЛОГИКА ГЕНЕРАЦИИ ──
         if btn:
