@@ -76,7 +76,9 @@ def hex_to_rgb(h):
 
 
 def parse_bold(text):
-    parts = re.split(r'(\*[^*]+\*)', text)
+    # Используем нежадный поиск, который игнорирует переносы строк внутри блока
+    # Это позволит корректно цеплять точки, кавычки и скобки
+    parts = re.split(r'(\*[^\*\n]+?\*)', text)
     segs = []
     for p in parts:
         if p.startswith('*') and p.endswith('*') and len(p) > 2:
@@ -109,13 +111,16 @@ def get_advance(d, text, font):
 
 
 def wrap_pixels(text, font, max_w, draw):
-    words = text.split()
+    # Вместо простого .split() используем регулярку, 
+    # чтобы не разбивать пробелами то, что находится внутри звездочек
+    words = re.findall(r'\*[^*]+\*|\S+', text)
+    
     if not words:
         return ['']
     lines, cur = [], [words[0]]
     for w in words[1:]:
         test = strip_markers(' '.join(cur + [w]))
-        tw = get_advance(draw, test, font)
+        tw = get_advance(draw, test.replace('\uFE0F', ''), font)
         if tw <= max_w:
             cur.append(w)
         else:
