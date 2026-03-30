@@ -20,7 +20,7 @@ BODY_FONT_PATH = './fonts/GoogleSans-Regular.ttf'
 FW, FH = 1080, 1350
 ACCENT = "#3B82F6"
 ACCENT2 = "#2563EB"
-SCROLL_H = 780  # px – высота обоих контейнеров
+SCROLL_H = 700  # Слегка уменьшил высоту окон, чтобы всё влезало без скролла страницы
 
 # ─────────────────────────────────────────────
 # CSS
@@ -68,83 +68,124 @@ st.markdown(f"""
 
 
 # ─────────────────────────────────────────────
-# TEXT UTILS (Ультимативный рендеринг)
+# TEXT UTILS (Ювелирное выравнивание эмодзи)
 # ─────────────────────────────────────────────
 def hex_to_rgb(h):
     h = h.lstrip('#')
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
 
 
-def parse_bold(text):
+def parse_rich_text(text):
+    """Разбивает текст на сегменты (текст, жирный, эмодзи)"""
+    # 1. Сначала ищем жирный текст *...*
     parts = re.split(r'(\*[^*]+\*)', text)
     segs = []
+    
     for p in parts:
         if p.startswith('*') and p.endswith('*') and len(p) > 2:
-            segs.append((p[1:-1], True))
+            content = p[1:-1]
+            segs.extend(_split_emoji_segs(content, is_bold=True))
         elif p:
-            segs.append((p, False))
+            segs.extend(_split_emoji_segs(p, is_bold=False))
     return segs
+
+def _split_emoji_segs(text, is_bold):
+    """Внутри сегмента ищет эмодзи"""
+    # Убираем Variation Selectors (\uFE0F), которые вызывают квадраты
+    clean_text = text.replace('\uFE0F', '').replace('\uFE0E', '')
+    
+    # Регулярка для поиска эмодзи (простой вариант, покрывающий большинство)
+    emoji_pattern = re.compile(r'([\U00010000-\U0010ffff\u2600-\u27bf\u2300-\u23ff\u2b50\u2b06\u2194-\u2199])')
+    parts = emoji_pattern.split(clean_text)
+    
+    final_segs = []
+    for p in parts:
+        if not p: continue
+        is_emoji = bool(emoji_pattern.match(p))
+        final_segs.append({
+            'text': p,
+            'is_bold': is_bold,
+            'is_emoji': is_emoji
+        })
+    return final_segs
 
 
 def strip_markers(text):
     return text.replace('*', '')
 
 
-def wrap_pixels(text, font, max_w, draw, pmj=None):
-    """Интеллектуальный перенос строк с точным учетом ширины эмодзи"""
-    words = text.split()
+def wrap_pixels_rich(text, font_reg, font_bold, max_w, draw, pmj):
+    """Интеллектуальный перенос строк, учитывающий эмодзи и болд"""
+    words = text.split(' ')
     if not words:
         return ['']
-    lines, cur = [], [words[0]]
+    
+    lines = []
+    cur_line_words = [words[0]]
+    
     for w in words[1:]:
-        test = strip_markers(' '.join(cur + [w]))
-        # Удаляем невидимые символы, вызывающие квадратики
-        clean_test = test.replace('\uFE0F', '').replace('\uFE0E', '').replace(' ', '\u00A0')
-        tw = 0
-        if pmj:
-            try:
-                tw = pmj.getsize(clean_test, font=font)[0]
-            except AttributeError:
-                tw = draw.textlength(clean_test, font=font) + sum(1 for c in clean_test if ord(c) > 0x2000) * (font.size * 1.1)
-        else:
-            tw = draw.textlength(clean_test, font=font)
+        test_line = ' '.join(cur_line_words + [w])
+        # Заменяем пробелы на неразрывные для точного замера
+        measure_text = test_line.replace(' ', '\u00A0')
+        
+        tw = _measure_rich_line_width(measure_text, font_reg, font_bold, draw, pmj)
             
         if tw <= max_w:
-            cur.append(w)
+            cur_line_words.append(w)
         else:
-            lines.append(' '.join(cur))
-            cur = [w]
-    lines.append(' '.join(cur))
+            lines.append(' '.join(cur_line_words))
+            cur_line_words = [w]
+            
+    lines.append(' '.join(cur_line_words))
     return lines
 
+def _measure_rich_line_width(text, font_reg, font_bold, draw, pmj):
+    """Замеряет ширину сложной строки"""
+    segs = parse_rich_text(text)
+    total_w = 0
+    for seg in segs:
+        font = font_bold if seg['is_bold'] else font_reg
+        if seg['is_emoji'] and pmj:
+            # Эмодзи замеряем через pilmoji, они чуть шире
+            total_w += pmj.getsize(seg['text'], font=font)[0]
+        else:
+            total_w += draw.textlength(seg['text'], font=font)
+    return total_w
 
-def draw_rich_line_pmj(target, x, y, text, f_reg, f_bold, color, shadow, draw, pmj):
-    """Отрисовка текста с тенями, болдом и идеально выровненными эмодзи"""
-    segs = parse_bold(text)
+
+def draw_rich_line_segmented(target, x, y, text, f_reg, f_bold, color, shadow, draw, pmj):
+    """Отрисовывает строку сегмент за сегментом, выравнивая эмодзи по высоте"""
+    segs = parse_rich_text(text)
     cx = x
+    
+    # Определяем визуальный центр шрифта (на сколько поднять эмодзи)
+    # 0.35 - это эмпирический коэффициент для Google Sans, чтобы отцентровать по строке
+    emoji_lift = int(f_reg.size * 0.35) 
 
-    for txt, bold in segs:
-        # Убиваем системные артефакты юникода (те самые квадратики)
-        clean_txt = txt.replace('\uFE0F', '').replace('\uFE0E', '')
-        font = f_bold if bold else f_reg
+    for seg in segs:
+        font = f_bold if seg['is_bold'] else f_reg
+        txt = seg['text']
+        
+        # Заменяем пробел на неразрывный во время отрисовки, чтобы он не пропадал
+        render_txt = txt.replace(' ', '\u00A0')
+        
+        # Определяем Y-координату: текст на базовой линии, эмодзи приподнимаем
+        render_y = y - emoji_lift if seg['is_emoji'] else y
         
         # 1. Тень
         if shadow:
-            if pmj:
-                pmj.text((cx + 3, y + 3), clean_txt, font=font, fill=(0, 0, 0, 128))
+            if pmj and seg['is_emoji']:
+                pmj.text((cx + 3, render_y + 3), render_txt, font=font, fill=(0, 0, 0, 128))
             else:
-                draw.text((cx + 3, y + 3), clean_txt, font=font, fill=(0, 0, 0, 128))
+                draw.text((cx + 3, render_y + 3), render_txt, font=font, fill=(0, 0, 0, 128))
         
-        # 2. Текст и точный расчет ширины
-        if pmj:
-            pmj.text((cx, y), clean_txt, font=font, fill=color)
-            try:
-                adv = pmj.getsize(clean_txt.replace(' ', '\u00A0'), font=font)[0]
-            except AttributeError:
-                adv = draw.textlength(clean_txt.replace(' ', '\u00A0'), font=font) + sum(1 for c in clean_txt if ord(c) > 0x2000) * (font.size * 1.1)
+        # 2. Основной текст
+        if pmj and seg['is_emoji']:
+            pmj.text((cx, render_y), render_txt, font=font, fill=color)
+            adv = pmj.getsize(render_txt, font=font)[0]
         else:
-            draw.text((cx, y), clean_txt, font=font, fill=color)
-            adv = draw.textlength(clean_txt.replace(' ', '\u00A0'), font=font)
+            draw.text((cx, render_y), render_txt, font=font, fill=color)
+            adv = draw.textlength(render_txt, font=font)
             
         cx += adv
 
@@ -190,27 +231,26 @@ def render_slide(slide, base, cfg):
     img = base.copy()
     draw = ImageDraw.Draw(img)
 
-    hf = cfg['hf']
-    tf = cfg['tf']
-    bf = cfg['bf']
+    hf, tf, bf = cfg['hf'], cfg['tf'], cfg['bf']
     color = cfg['color']
     shadow = cfg['shadow']
     use_pm = cfg['use_pilmoji']
 
-    # Поднимаем эмодзи на 15% вверх, чтобы они не падали под строку
-    offset_y = -int(tf.size * 0.15) if tf else -6
-    pmj_context = Pilmoji(img, emoji_position_offset=(0, offset_y)) if (use_pm and HAS_PILMOJI) else None
+    # ВАЖНО: Убираем глобальный emoji_position_offset, 
+    # так как теперь выравниваем каждый сегмент вручную в draw_rich_line_segmented
+    pmj_context = Pilmoji(img) if (use_pm and HAS_PILMOJI) else None
 
     with ExitStack() as stack:
         pmj = stack.enter_context(pmj_context) if pmj_context else None
 
-        h_lines = wrap_pixels(slide['title'], hf, cfg['hw'], draw, pmj)
+        # Перенос строк с учетом сложного контента
+        h_lines = wrap_pixels_rich(slide['title'], hf, hf, cfg['hw'], draw, pmj)
 
         body_lines = []
         for para in slide['text'].split('\n'):
             para = para.strip()
             if para:
-                body_lines.extend(wrap_pixels(para, tf, cfg['bw'], draw, pmj))
+                body_lines.extend(wrap_pixels_rich(para, tf, bf, cfg['bw'], draw, pmj))
             else:
                 body_lines.append('')
 
@@ -220,25 +260,30 @@ def render_slide(slide, base, cfg):
         tx, ty = cfg['tx'], cfg['ty']
         cur_y = ty
 
+        # Отрисовка заголовка
         for line in h_lines:
-            draw_rich_line_pmj(img, tx, cur_y, line, hf, hf, color, shadow, draw, pmj)
+            draw_rich_line_segmented(img, tx, cur_y, line, hf, hf, color, shadow, draw, pmj)
             cur_y += title_lh
 
         cur_y += cfg['gap']
 
+        # Отрисовка тела
         for line in body_lines:
             if line:
-                draw_rich_line_pmj(img, tx, cur_y, line, tf, bf, color, shadow, draw, pmj)
+                draw_rich_line_segmented(img, tx, cur_y, line, tf, bf, color, shadow, draw, pmj)
             cur_y += text_lh
 
+        # Вотермарки
         for wm in cfg.get('wms', []):
             if wm and (wm['text'] or wm['avatar']):
-                _draw_wm_pmj(img, wm, color, draw, pmj)
+                # Для вотермарок пока оставляем старый метод отрисовки, там эмодзи редкость
+                _draw_wm_legacy(img, wm, color, draw, pmj)
 
     return img.convert("RGB")
 
 
-def _draw_wm_pmj(img, wm, default_color, draw, pmj):
+def _draw_wm_legacy(img, wm, default_color, draw, pmj):
+    """Старый метод отрисовки вотермарок (без посегментного выравнивания)"""
     wf = wm['font']
     if not wf:
         return
@@ -247,19 +292,16 @@ def _draw_wm_pmj(img, wm, default_color, draw, pmj):
     av = wm['avatar']
     av_sz = wm['av_size']
 
-    tw, th = 0, 0
-    if text:
-        clean_text = text.replace('\uFE0F', '').replace('\uFE0E', '')
-        if pmj:
-            try:
-                tw = pmj.getsize(clean_text.replace(' ', '\u00A0'), font=wf)[0]
-            except AttributeError:
-                tw = draw.textlength(clean_text.replace(' ', '\u00A0'), font=wf) + sum(1 for c in clean_text if ord(c) > 0x2000) * (wf.size * 1.1)
-        else:
-            tw = draw.textlength(clean_text.replace(' ', '\u00A0'), font=wf)
-            
-        bb = draw.textbbox((0, 0), strip_markers(text), font=wf)
-        th = bb[3] - bb[1]
+    # Замер ширины через pilmoji (если есть)
+    clean_text = text.replace('\uFE0F', '').replace('\uFE0E', '')
+    measure_txt = clean_text.replace(' ', '\u00A0')
+    if pmj:
+        tw = pmj.getsize(measure_txt, font=wf)[0]
+    else:
+        tw = draw.textlength(measure_txt, font=wf)
+        
+    bb = draw.textbbox((0, 0), strip_markers(text), font=wf)
+    th = bb[3] - bb[1]
 
     total_w = int(tw) + (av_sz + 12 if av else 0)
     bh = max(th, av_sz if av else 0)
@@ -286,7 +328,10 @@ def _draw_wm_pmj(img, wm, default_color, draw, pmj):
     if text:
         ty = int(wy + (bh - th) // 2)
         fill = (*default_color[:3], alpha)
-        clean_text = text.replace('\uFE0F', '').replace('\uFE0E', '')
+        
+        # Тень вотермарка (без пилмоджи для простоты)
+        draw.text((cx + 2, ty + 2), clean_text, font=wf, fill=(0, 0, 0, 70))
+        
         if pmj:
             pmj.text((cx, ty), clean_text, font=wf, fill=fill)
         else:
@@ -394,7 +439,9 @@ with left_col:
 Второй абзац с *жирным* словом.
 ---
 ЗАГОЛОВОК 2
-Текст второго слайда. 🌟
+📌 *Сохрани*, чтобы вернуться.
+💬 *Отправь* тому, кто грызет себя.
+🔹 *Подписывайся* на Instagram.
 ---
 ЗАГОЛОВОК 3
 Текст третьего слайда."""
@@ -408,6 +455,7 @@ with right_col:
         try:
             hf = ImageFont.truetype(HEADER_FONT_PATH, header_size)
             tf = ImageFont.truetype(BODY_FONT_PATH, text_size)
+            # Болд для тела берем из жирного шрифта заголовка, но размером тела
             bf = ImageFont.truetype(HEADER_FONT_PATH, text_size)
         except IOError:
             fonts_ok = False
@@ -442,19 +490,21 @@ with right_col:
 
         slides_data = parse_slides(text_input) if text_input.strip() else []
 
-        # ── PREVIEW ──
+        # ── PREVIEW (Чистый и компактный макет) ──
         with st.container(border=True):
-            st.markdown("### Превью")
+            # Убрали заголовок "### Превью"
             if uploaded_bgs and fonts_ok and slides_data:
                 bg = prepare_bg(uploaded_bgs[0], bg_darken)
                 preview = render_slide(slides_data[0], bg, cfg)
-                st.image(preview, use_container_width=True)
+                # Уменьшили превью, зафиксировав ширину (width=340)
+                st.image(preview, width=340)
             elif not uploaded_bgs:
                 st.info("← Загрузи фон")
             elif not slides_data:
                 st.info("← Добавь контент")
 
         # ── GENERATE ──
+        # Убрали лишние отступы, кнопка теперь выше
         btn = st.button("Сгенерировать карусель", type="primary", use_container_width=True)
 
         if btn:
@@ -472,6 +522,8 @@ with right_col:
                         images.append(render_slide(slide, bg, cfg))
 
                 st.success(f"Готово – {len(images)} слайд(ов)")
+                
+                # Показываем результаты в скроллящейся области
                 cols = st.columns(2)
                 for idx, im in enumerate(images):
                     cols[idx % 2].image(im, caption=f"Слайд {idx+1}", use_container_width=True)
