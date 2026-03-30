@@ -4,108 +4,77 @@ import io
 import zipfile
 import re
 
+# ── pilmoji for emoji ──
+try:
+    from pilmoji import Pilmoji
+    HAS_PILMOJI = True
+except ImportError:
+    HAS_PILMOJI = False
+
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
 HEADER_FONT_PATH = './fonts/GoogleSans-Bold.ttf'
 BODY_FONT_PATH = './fonts/GoogleSans-Regular.ttf'
-BOLD_FONT_PATH = './fonts/GoogleSans-Bold.ttf'
-EMOJI_FONT_PATHS = [
-    './fonts/NotoColorEmoji.ttf',
-    '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf',
-]
 FW, FH = 1080, 1350
 ACCENT = "#3B82F6"
-ACCENT_HOVER = "#2563EB"
-
+ACCENT2 = "#2563EB"
 
 # ─────────────────────────────────────────────
-# STYLES + STICKY JS
+# CSS
 # ─────────────────────────────────────────────
-def inject_ui():
-    st.markdown(f"""
-    <style>
-        .block-container {{
-            padding-top: 1rem !important;
-            padding-bottom: 0.5rem !important;
-        }}
+st.set_page_config(page_title="Carousel Gen", page_icon="⬛", layout="wide")
 
-        /* ── blue accent ── */
-        .stButton > button[kind="primary"],
-        .stDownloadButton > button[kind="primary"],
-        button[kind="primary"] {{
-            background-color: {ACCENT} !important;
-            border-color: {ACCENT} !important;
-            color: white !important;
-            font-weight: 600 !important;
-            padding: 0.55rem 1rem !important;
-            border-radius: 10px !important;
-        }}
-        .stButton > button[kind="primary"]:hover,
-        .stDownloadButton > button[kind="primary"]:hover,
-        button[kind="primary"]:hover {{
-            background-color: {ACCENT_HOVER} !important;
-            border-color: {ACCENT_HOVER} !important;
-        }}
+st.markdown(f"""
+<style>
+    /* kill page-level scroll – only left panel scrolls */
+    .block-container {{
+        padding-top: 0.8rem !important;
+        padding-bottom: 0 !important;
+        max-height: 100vh;
+        overflow: hidden;
+    }}
 
-        /* ── toggle accent ── */
-        [data-testid="stToggle"] label span[data-checked="true"] {{
-            background-color: {ACCENT} !important;
-        }}
+    /* buttons */
+    .stButton > button[kind="primary"],
+    .stDownloadButton > button[kind="primary"],
+    button[kind="primary"] {{
+        background-color: {ACCENT} !important;
+        border-color: {ACCENT} !important;
+        color: white !important;
+        font-weight: 600 !important;
+        border-radius: 10px !important;
+        padding: 0.5rem 1rem !important;
+    }}
+    .stButton > button[kind="primary"]:hover,
+    .stDownloadButton > button[kind="primary"]:hover {{
+        background-color: {ACCENT2} !important;
+        border-color: {ACCENT2} !important;
+    }}
 
-        /* ── containers ── */
-        [data-testid="stExpander"] {{
-            border-color: rgba(59, 130, 246, 0.2) !important;
-            border-radius: 12px !important;
-        }}
-        div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"] {{
-            border-radius: 12px !important;
-            border-color: rgba(59, 130, 246, 0.15) !important;
-        }}
+    /* section headers */
+    h3 {{
+        font-size: 0.9rem !important;
+        margin-top: 0.4rem !important;
+        margin-bottom: 0.2rem !important;
+        color: {ACCENT} !important;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+    }}
 
-        /* ── typography ── */
-        h3 {{
-            font-size: 0.95rem !important;
-            margin-top: 0.6rem !important;
-            margin-bottom: 0.25rem !important;
-            color: {ACCENT} !important;
-            letter-spacing: 0.02em;
-            text-transform: uppercase;
-        }}
-        .stSlider label {{ font-size: 0.82rem; }}
-        .stCaption {{ font-size: 0.75rem !important; opacity: 0.7; }}
+    /* containers */
+    div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"] {{
+        border-radius: 12px !important;
+        border-color: rgba(59, 130, 246, 0.15) !important;
+    }}
 
-        /* ── right col sticky ── */
-        #sticky-preview-anchor {{
-            position: sticky;
-            top: 0.5rem;
-            z-index: 50;
-        }}
-    </style>
-    """, unsafe_allow_html=True)
+    .stSlider label {{ font-size: 0.8rem; }}
+    .stCaption {{ font-size: 0.72rem !important; opacity: 0.65; }}
 
-    # JS: force right column to be sticky
-    st.markdown("""
-    <script>
-    (function() {
-        function makeSticky() {
-            const cols = document.querySelectorAll('[data-testid="stColumns"] > [data-testid="column"]');
-            if (cols.length >= 2) {
-                const rightCol = cols[cols.length - 1];
-                rightCol.style.position = 'sticky';
-                rightCol.style.top = '0.5rem';
-                rightCol.style.alignSelf = 'flex-start';
-                rightCol.style.maxHeight = '99vh';
-                rightCol.style.overflowY = 'auto';
-            }
-        }
-        // run on load and after streamlit rerenders
-        makeSticky();
-        const observer = new MutationObserver(makeSticky);
-        observer.observe(document.body, { childList: true, subtree: true });
-    })();
-    </script>
-    """, unsafe_allow_html=True)
+    /* hide default header */
+    header[data-testid="stHeader"] {{ display: none; }}
+</style>
+""", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
@@ -114,28 +83,6 @@ def inject_ui():
 def hex_to_rgb(h):
     h = h.lstrip('#')
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-
-
-def is_emoji(ch):
-    cp = ord(ch)
-    return (
-        0x1F600 <= cp <= 0x1F64F or 0x1F300 <= cp <= 0x1F5FF or
-        0x1F680 <= cp <= 0x1F6FF or 0x1F1E0 <= cp <= 0x1F1FF or
-        0x2600 <= cp <= 0x26FF or 0x2700 <= cp <= 0x27BF or
-        0x1F900 <= cp <= 0x1F9FF or 0x1FA00 <= cp <= 0x1FAFF or
-        0xFE00 <= cp <= 0xFE0F or cp == 0x200D or cp == 0x2764 or
-        cp == 0x2B50 or 0x231A <= cp <= 0x231B or
-        0x23E9 <= cp <= 0x23F3 or cp > 0x1F000
-    )
-
-
-def load_emoji_font(size):
-    for p in EMOJI_FONT_PATHS:
-        try:
-            return ImageFont.truetype(p, size)
-        except (IOError, OSError):
-            continue
-    return None
 
 
 def parse_bold(text):
@@ -154,13 +101,14 @@ def strip_markers(text):
 
 
 def wrap_pixels(text, font, max_w, draw):
+    """Word-wrap by pixel width. Never breaks words."""
     words = text.split()
     if not words:
         return ['']
     lines, cur = [], [words[0]]
     for w in words[1:]:
-        test = ' '.join(cur + [w])
-        tw = draw.textlength(strip_markers(test), font=font)
+        test = strip_markers(' '.join(cur + [w]))
+        tw = draw.textlength(test, font=font)
         if tw <= max_w:
             cur.append(w)
         else:
@@ -170,34 +118,28 @@ def wrap_pixels(text, font, max_w, draw):
     return lines
 
 
-def _draw_chunk(d, x, y, text, font, color, shadow):
-    if shadow:
-        d.text((x + 3, y + 3), text, font=font, fill=(0, 0, 0, 128))
-    d.text((x, y), text, font=font, fill=color)
-
-
-def draw_rich_line(d, x, y, text, f_reg, f_bold, f_emoji, color, shadow):
+def draw_rich_line(target, x, y, text, f_reg, f_bold, color, shadow, use_pilmoji):
+    """Draw one line with *bold* and emoji support."""
     segs = parse_bold(text)
     cx = x
-    for txt, bold in segs:
-        font = f_bold if bold else f_reg
-        if f_emoji:
-            buf = ''
-            for ch in txt:
-                if is_emoji(ch):
-                    if buf:
-                        _draw_chunk(d, cx, y, buf, font, color, shadow)
-                        cx += d.textlength(buf, font=font)
-                        buf = ''
-                    _draw_chunk(d, cx, y, ch, f_emoji, color, shadow)
-                    cx += d.textlength(ch, font=f_emoji)
-                else:
-                    buf += ch
-            if buf:
-                _draw_chunk(d, cx, y, buf, font, color, shadow)
-                cx += d.textlength(buf, font=font)
-        else:
-            _draw_chunk(d, cx, y, txt, font, color, shadow)
+
+    if use_pilmoji and HAS_PILMOJI:
+        with Pilmoji(target) as pmj:
+            for txt, bold in segs:
+                font = f_bold if bold else f_reg
+                if shadow:
+                    pmj.text((cx + 3, y + 3), txt, font=font, fill=(0, 0, 0, 128))
+                pmj.text((cx, y), txt, font=font, fill=color)
+                # measure advance
+                d = ImageDraw.Draw(target)
+                cx += d.textlength(strip_markers(txt), font=font)
+    else:
+        d = ImageDraw.Draw(target)
+        for txt, bold in segs:
+            font = f_bold if bold else f_reg
+            if shadow:
+                d.text((cx + 3, y + 3), txt, font=font, fill=(0, 0, 0, 128))
+            d.text((cx, y), txt, font=font, fill=color)
             cx += d.textlength(txt, font=font)
 
 
@@ -245,12 +187,14 @@ def render_slide(slide, base, cfg):
     hf = cfg['hf']
     tf = cfg['tf']
     bf = cfg['bf']
-    ef = cfg['ef']
     color = cfg['color']
     shadow = cfg['shadow']
+    use_pm = cfg['use_pilmoji']
 
+    # header lines
     h_lines = wrap_pixels(slide['title'], hf, cfg['hw'], draw)
 
+    # body lines with paragraph support
     body_lines = []
     for para in slide['text'].split('\n'):
         para = para.strip()
@@ -259,192 +203,186 @@ def render_slide(slide, base, cfg):
         else:
             body_lines.append('')
 
-    title_lh = int(cfg['hs'] * cfg['h_line_mult'])
-    text_lh = int(cfg['ts'] * cfg['t_line_mult'])
+    title_lh = int(cfg['hs'] * cfg['h_spacing'])
+    text_lh = int(cfg['ts'] * cfg['t_spacing'])
 
     tx, ty = cfg['tx'], cfg['ty']
     cur_y = ty
 
+    # draw header
     for line in h_lines:
-        draw_rich_line(draw, tx, cur_y, line, hf, hf, ef, color, shadow)
+        draw_rich_line(img, tx, cur_y, line, hf, hf, color, shadow, use_pm)
         cur_y += title_lh
 
     cur_y += cfg['gap']
 
+    # draw body
     for line in body_lines:
         if line:
-            draw_rich_line(draw, tx, cur_y, line, tf, bf, ef, color, shadow)
+            draw_rich_line(img, tx, cur_y, line, tf, bf, color, shadow, use_pm)
         cur_y += text_lh
 
     # watermarks
     for wm in cfg.get('wms', []):
         if wm and (wm['text'] or wm['avatar']):
-            _draw_watermark(img, wm, color)
+            _draw_wm(img, wm, color, use_pm)
 
     return img.convert("RGB")
 
 
-def _draw_watermark(img, wm, default_color):
-    wm_text = wm['text']
-    av_img = wm['avatar']
-    av_sz = wm['av_size']
+def _draw_wm(img, wm, default_color, use_pm):
+    draw = ImageDraw.Draw(img)
     wf = wm['font']
     alpha = wm['alpha']
+    text = wm['text']
+    av = wm['avatar']
+    av_sz = wm['av_size']
 
-    draw = ImageDraw.Draw(img)
-    text_w, text_h = 0, 0
-    if wm_text:
-        bb = draw.textbbox((0, 0), wm_text, font=wf)
-        text_w = bb[2] - bb[0]
-        text_h = bb[3] - bb[1]
+    tw, th = 0, 0
+    if text:
+        bb = draw.textbbox((0, 0), text, font=wf)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
 
-    total_w = text_w + (av_sz + 12 if av_img else 0)
-    block_h = max(text_h, av_sz if av_img else 0)
-    wm_y = FH - 80 + wm['oy']
+    total_w = tw + (av_sz + 12 if av else 0)
+    bh = max(th, av_sz if av else 0)
+    wy = FH - 80 + wm['oy']
 
     if wm['pos'] == 'Слева':
-        wm_x = 60 + wm['ox']
+        wx = 60 + wm['ox']
     elif wm['pos'] == 'Справа':
-        wm_x = FW - total_w - 60 + wm['ox']
+        wx = FW - total_w - 60 + wm['ox']
     else:
-        wm_x = (FW - total_w) // 2 + wm['ox']
+        wx = (FW - total_w) // 2 + wm['ox']
 
-    cx = int(wm_x)
+    cx = int(wx)
 
-    if av_img and av_sz > 0:
-        av = av_img.copy().resize((av_sz, av_sz), Image.Resampling.LANCZOS).convert("RGBA")
+    if av and av_sz > 0:
+        a = av.copy().resize((av_sz, av_sz), Image.Resampling.LANCZOS).convert("RGBA")
         mask = Image.new('L', (av_sz, av_sz), 0)
         ImageDraw.Draw(mask).ellipse((0, 0, av_sz - 1, av_sz - 1), fill=255)
-        av.putalpha(mask)
-        av_y = int(wm_y + (block_h - av_sz) // 2)
-        img.alpha_composite(av, (cx, av_y))
+        a.putalpha(mask)
+        ay = int(wy + (bh - av_sz) // 2)
+        img.alpha_composite(a, (cx, ay))
         cx += av_sz + 12
 
-    if wm_text:
+    if text:
         draw2 = ImageDraw.Draw(img)
-        text_y = int(wm_y + (block_h - text_h) // 2)
-        draw2.text((cx, text_y), wm_text, font=wf, fill=(*default_color[:3], alpha))
+        ty = int(wy + (bh - th) // 2)
+        fill = (*default_color[:3], alpha)
+        if use_pm and HAS_PILMOJI:
+            with Pilmoji(img) as pmj:
+                pmj.text((cx, ty), text, font=wf, fill=fill)
+        else:
+            draw2.text((cx, ty), text, font=wf, fill=fill)
 
 
 # ─────────────────────────────────────────────
-# WATERMARK UI BLOCK (reusable)
+# WATERMARK UI (reusable)
 # ─────────────────────────────────────────────
-def watermark_ui(label, prefix):
-    """Renders a watermark settings block and returns config dict."""
+def wm_block(label, prefix):
     with st.container(border=True):
         st.markdown(f"### {label}")
-        wm_text = st.text_input("Текст", value="", placeholder="@username", key=f"{prefix}_text", label_visibility="collapsed")
-
+        text = st.text_input("Текст", value="", placeholder="@username", key=f"{prefix}_t", label_visibility="collapsed")
         c1, c2 = st.columns(2)
         with c1:
-            wm_pos = st.selectbox("Позиция", ["Слева", "По центру", "Справа"], index=0, key=f"{prefix}_pos")
+            pos = st.selectbox("Позиция", ["Слева", "По центру", "Справа"], key=f"{prefix}_p")
         with c2:
-            wm_avatar_file = st.file_uploader("Аватарка", type=['png', 'jpg', 'jpeg'], key=f"{prefix}_av")
-
+            av_file = st.file_uploader("Аватарка", type=['png', 'jpg', 'jpeg'], key=f"{prefix}_a")
         c3, c4 = st.columns(2)
         with c3:
-            wm_av_size = st.slider("Аватарка px", 20, 120, 44, step=2, key=f"{prefix}_avsz")
+            av_sz = st.slider("Аватарка px", 20, 120, 44, step=2, key=f"{prefix}_as")
         with c4:
-            wm_font_size = st.slider("Размер текста", 14, 60, 26, step=1, key=f"{prefix}_fsz")
-
+            fsz = st.slider("Размер текста", 14, 60, 26, step=1, key=f"{prefix}_fs")
         c5, c6, c7 = st.columns(3)
         with c5:
-            wm_alpha = st.slider("Прозрачность", 30, 255, 140, step=5, key=f"{prefix}_alpha")
+            alpha = st.slider("Прозрачность", 30, 255, 140, step=5, key=f"{prefix}_al")
         with c6:
-            wm_ox = st.slider("Сдвиг X", -300, 300, 0, step=5, key=f"{prefix}_ox")
+            ox = st.slider("X", -300, 300, 0, step=5, key=f"{prefix}_ox")
         with c7:
-            wm_oy = st.slider("Сдвиг Y", -300, 300, 0, step=5, key=f"{prefix}_oy")
+            oy = st.slider("Y", -300, 300, 0, step=5, key=f"{prefix}_oy")
 
-    avatar_img = None
-    if wm_avatar_file:
-        avatar_img = Image.open(wm_avatar_file).convert("RGBA")
+    av_img = None
+    if av_file:
+        av_img = Image.open(av_file).convert("RGBA")
 
     return {
-        'text': wm_text,
-        'pos': wm_pos,
-        'avatar': avatar_img,
-        'av_size': wm_av_size,
-        'font_size': wm_font_size,
-        'alpha': wm_alpha,
-        'ox': wm_ox,
-        'oy': wm_oy,
-        'font': None,  # will be set after font load
+        'text': text, 'pos': pos,
+        'avatar': av_img, 'av_size': av_sz,
+        'font_size': fsz, 'alpha': alpha,
+        'ox': ox, 'oy': oy, 'font': None,
     }
 
 
 # ─────────────────────────────────────────────
-# APP
+# LAYOUT
 # ─────────────────────────────────────────────
-st.set_page_config(page_title="Carousel Gen", page_icon="⬛", layout="wide")
-inject_ui()
-
-left, right = st.columns([5, 4], gap="large")
+left_col, right_col = st.columns([5, 4], gap="large")
 
 # ═══════════════════════════════════════════
-# LEFT
+# LEFT – scrollable settings
 # ═══════════════════════════════════════════
-with left:
+with left_col:
+    # This container has a fixed height and scrolls internally
+    with st.container(height=860):
 
-    # ── ФОНЫ ──
-    with st.container(border=True):
-        st.markdown("### Фоны")
-        uploaded_bgs = st.file_uploader(
-            "bg", type=['png', 'jpg', 'jpeg'],
-            accept_multiple_files=True, label_visibility="collapsed"
-        )
-        bg_darken = st.slider("Затемнение", 0, 100, 0, format="%d%%")
+        # ── ФОНЫ ──
+        with st.container(border=True):
+            st.markdown("### Фоны")
+            uploaded_bgs = st.file_uploader(
+                "bg", type=['png', 'jpg', 'jpeg'],
+                accept_multiple_files=True, label_visibility="collapsed"
+            )
+            bg_darken = st.slider("Затемнение", 0, 100, 0, format="%d%%")
 
-    # ── НИКНЕЙМ 1 ──
-    wm1_cfg = watermark_ui("Никнейм 1", "wm1")
+        # ── НИКНЕЙМ 1 ──
+        wm1 = wm_block("Никнейм 1", "w1")
 
-    # ── НИКНЕЙМ 2 ──
-    wm2_cfg = watermark_ui("Никнейм 2", "wm2")
+        # ── НИКНЕЙМ 2 ──
+        wm2 = wm_block("Никнейм 2", "w2")
 
-    # ── ТИПОГРАФИКА ──
-    with st.container(border=True):
-        st.markdown("### Типографика")
-        tc1, tc2 = st.columns(2)
-        with tc1:
-            text_color_hex = st.color_picker("Цвет текста", "#FFFFFF")
-        with tc2:
-            add_shadow = st.toggle("Тень текста", value=False)
-        tc3, tc4 = st.columns(2)
-        with tc3:
-            header_size = st.slider("Размер заголовка", 30, 120, 70, step=2)
-        with tc4:
-            text_size = st.slider("Размер текста", 20, 80, 40, step=2)
-        space_between = st.slider("Отступ заголовок → текст", 10, 250, 100, step=10)
+        # ── ТИПОГРАФИКА ──
+        with st.container(border=True):
+            st.markdown("### Типографика")
+            tc1, tc2 = st.columns(2)
+            with tc1:
+                text_color_hex = st.color_picker("Цвет текста", "#FFFFFF")
+            with tc2:
+                add_shadow = st.toggle("Тень текста", value=False)
+            tc3, tc4 = st.columns(2)
+            with tc3:
+                header_size = st.slider("Заголовок", 30, 120, 70, step=2)
+            with tc4:
+                text_size = st.slider("Текст", 20, 80, 40, step=2)
+            space_gap = st.slider("Отступ заголовок → текст", 10, 250, 100, step=10)
 
-    # ── МЕЖСТРОЧНЫЙ ИНТЕРВАЛ ──
-    with st.container(border=True):
-        st.markdown("### Межстрочный интервал")
-        lc1, lc2 = st.columns(2)
-        with lc1:
-            h_line_mult = st.slider("Интервал заголовка", 1.0, 2.5, 1.25, step=0.05, key="hlm")
-        with lc2:
-            t_line_mult = st.slider("Интервал текста", 1.0, 3.0, 1.55, step=0.05, key="tlm")
+        # ── МЕЖСТРОЧНЫЙ ──
+        with st.container(border=True):
+            st.markdown("### Межстрочный интервал")
+            lc1, lc2 = st.columns(2)
+            with lc1:
+                h_spacing = st.slider("Заголовок", 1.0, 2.5, 1.25, step=0.05, key="hs_sp")
+            with lc2:
+                t_spacing = st.slider("Текст", 1.0, 3.0, 1.55, step=0.05, key="ts_sp")
 
-    # ── КОНТЕЙНЕР ТЕКСТА ──
-    with st.container(border=True):
-        st.markdown("### Контейнер текста")
-        st.caption("Ширина области переноса (px)")
-        kc1, kc2 = st.columns(2)
-        with kc1:
-            header_w = st.slider("Ширина заголовка", 300, 1040, 900, step=10)
-        with kc2:
-            body_w = st.slider("Ширина текста", 300, 1040, 900, step=10)
-        st.caption("Позиция блока на слайде")
-        pc1, pc2 = st.columns(2)
-        with pc1:
-            text_x = st.slider("X (горизонталь)", 20, 500, 90, step=5)
-        with pc2:
-            text_y = st.slider("Y (вертикаль)", 50, 1100, 350, step=10)
+        # ── КОНТЕЙНЕР ──
+        with st.container(border=True):
+            st.markdown("### Контейнер текста")
+            kc1, kc2 = st.columns(2)
+            with kc1:
+                header_w = st.slider("Ширина заголовка", 300, 1040, 900, step=10)
+            with kc2:
+                body_w = st.slider("Ширина текста", 300, 1040, 900, step=10)
+            pc1, pc2 = st.columns(2)
+            with pc1:
+                text_x = st.slider("Позиция X", 20, 500, 90, step=5)
+            with pc2:
+                text_y = st.slider("Позиция Y", 50, 1100, 350, step=10)
 
-    # ── КОНТЕНТ ──
-    with st.container(border=True):
-        st.markdown("### Контент")
-        st.caption("Слайды через `---` · первая строка = заголовок · `*жирный*` · пустая строка = абзац")
-        default_text = """ЗАГОЛОВОК 1
+        # ── КОНТЕНТ ──
+        with st.container(border=True):
+            st.markdown("### Контент")
+            st.caption("Слайды: `---` · первая строка = заголовок · `*жирный*` · пустая строка = абзац")
+            default_text = """ЗАГОЛОВОК 1
 Текст первого слайда.
 
 Второй абзац с *жирным* словом.
@@ -454,59 +392,54 @@ with left:
 ---
 ЗАГОЛОВОК 3
 Текст третьего слайда."""
-        text_input = st.text_area("content", value=default_text, height=260, label_visibility="collapsed")
+            text_input = st.text_area("c", value=default_text, height=220, label_visibility="collapsed")
 
 
 # ═══════════════════════════════════════════
-# RIGHT
+# RIGHT – fixed preview + generate
 # ═══════════════════════════════════════════
-with right:
-    # anchor for sticky
-    st.markdown('<div id="sticky-preview-anchor"></div>', unsafe_allow_html=True)
+with right_col:
 
     fonts_ok = True
     try:
         hf = ImageFont.truetype(HEADER_FONT_PATH, header_size)
         tf = ImageFont.truetype(BODY_FONT_PATH, text_size)
-        bf = ImageFont.truetype(BOLD_FONT_PATH, text_size)
+        bf = ImageFont.truetype(HEADER_FONT_PATH, text_size)  # bold body
     except IOError:
         fonts_ok = False
-        st.error("Шрифты не найдены в ./fonts/ – нужен GoogleSans-Bold.ttf и GoogleSans-Regular.ttf")
+        st.error("Шрифты не найдены – нужны GoogleSans-Bold.ttf и GoogleSans-Regular.ttf в ./fonts/")
 
-    ef = load_emoji_font(text_size) if fonts_ok else None
-
-    # load watermark fonts
     if fonts_ok:
         try:
-            wm1_cfg['font'] = ImageFont.truetype(BODY_FONT_PATH, wm1_cfg['font_size'])
-            wm2_cfg['font'] = ImageFont.truetype(BODY_FONT_PATH, wm2_cfg['font_size'])
+            wm1['font'] = ImageFont.truetype(BODY_FONT_PATH, wm1['font_size'])
+            wm2['font'] = ImageFont.truetype(BODY_FONT_PATH, wm2['font_size'])
         except IOError:
             pass
 
-    if fonts_ok and not ef:
-        st.caption("ℹ️ Для эмодзи – NotoEmoji-Regular.ttf в ./fonts/")
+    use_pilmoji = HAS_PILMOJI
+    if not HAS_PILMOJI:
+        st.caption("⚡ `pip install pilmoji` – для полноценных эмодзи")
 
     cfg = {
         'hf': hf if fonts_ok else None,
         'tf': tf if fonts_ok else None,
         'bf': bf if fonts_ok else None,
-        'ef': ef,
+        'ef': None,
         'color': hex_to_rgb(text_color_hex),
-        'hs': header_size,
-        'ts': text_size,
-        'hw': header_w,
-        'bw': body_w,
-        'tx': text_x,
-        'ty': text_y,
-        'gap': space_between,
+        'hs': header_size, 'ts': text_size,
+        'hw': header_w, 'bw': body_w,
+        'tx': text_x, 'ty': text_y,
+        'gap': space_gap,
         'shadow': add_shadow,
-        'h_line_mult': h_line_mult,
-        't_line_mult': t_line_mult,
-        'wms': [wm1_cfg, wm2_cfg],
+        'h_spacing': h_spacing,
+        't_spacing': t_spacing,
+        'use_pilmoji': use_pilmoji,
+        'wms': [wm1, wm2],
     }
 
     slides_data = parse_slides(text_input) if text_input.strip() else []
 
+    # ── PREVIEW ──
     with st.container(border=True):
         if uploaded_bgs and fonts_ok and slides_data:
             bg = prepare_bg(uploaded_bgs[0], bg_darken)
@@ -517,6 +450,7 @@ with right:
         elif not slides_data:
             st.info("← Добавь контент")
 
+    # ── GENERATE ──
     btn = st.button("Сгенерировать карусель", type="primary", use_container_width=True)
 
     if btn:
