@@ -13,7 +13,7 @@ except ImportError:
     HAS_PILMOJI = False
 
 # ─────────────────────────────────────────────
-# CONFIG
+# CONFIG & STATE INIT
 # ─────────────────────────────────────────────
 HEADER_FONT_PATH = './fonts/GoogleSans-Bold.ttf'
 BODY_FONT_PATH = './fonts/GoogleSans-Regular.ttf'
@@ -21,6 +21,11 @@ FW, FH = 1080, 1350
 ACCENT = "#3B82F6"
 ACCENT2 = "#2563EB"
 SCROLL_H = 780
+
+if 'generated_images' not in st.session_state:
+    st.session_state.generated_images = None
+if 'zip_buffer' not in st.session_state:
+    st.session_state.zip_buffer = None
 
 # ─────────────────────────────────────────────
 # CSS
@@ -76,9 +81,7 @@ def hex_to_rgb(h):
 
 
 def parse_bold(text):
-    # Используем нежадный поиск, который игнорирует переносы строк внутри блока
-    # Это позволит корректно цеплять точки, кавычки и скобки
-    parts = re.split(r'(\*[^\*\n]+?\*)', text)
+    parts = re.split(r'(\*[^*]+\*)', text)
     segs = []
     for p in parts:
         if p.startswith('*') and p.endswith('*') and len(p) > 2:
@@ -111,27 +114,13 @@ def get_advance(d, text, font):
 
 
 def wrap_pixels(text, font, max_w, draw):
-    # 1. МАГИЯ: Распределяем жирность на каждое слово отдельно.
-    # Это позволит программе переносить жирные слова по одному, 
-    # не ломая контейнер и сохраняя стиль.
-    def distribute_bold(match):
-        content = match.group(1)
-        return ' '.join([f'*{w}*' for w in content.split()])
-    
-    # Превращаем "*текст из слов*" в "*текст* *из* *слов*"
-    processed_text = re.sub(r'\*([^*]+)\*', distribute_bold, text)
-    
-    # 2. Теперь стандартно разбиваем по пробелам. 
-    # Теперь ни одно "слово" не будет шире экрана.
-    words = processed_text.split()
-    
+    words = text.split()
     if not words:
         return ['']
     lines, cur = [], [words[0]]
     for w in words[1:]:
         test = strip_markers(' '.join(cur + [w]))
-        # Используем наш быстрый замер ширины
-        tw = get_advance(draw, test.replace('\uFE0F', ''), font)
+        tw = get_advance(draw, test, font)
         if tw <= max_w:
             cur.append(w)
         else:
@@ -199,6 +188,23 @@ def prepare_bg_cached(file_bytes, darken, final_w, final_h):
     return base
 
 
+def _draw_logo(img, logo_bytes, size, x, y, alpha):
+    logo = Image.open(io.BytesIO(logo_bytes)).convert("RGBA")
+    w, h = logo.size
+    # Пропорциональное изменение размера по ширине
+    ratio = size / float(w)
+    new_h = int((float(h) * float(ratio)))
+    logo = logo.resize((size, new_h), Image.Resampling.LANCZOS)
+
+    # Применяем прозрачность
+    if alpha < 255:
+        r, g, b, a = logo.split()
+        a = a.point(lambda p: int(p * (alpha / 255.0)))
+        logo = Image.merge("RGBA", (r, g, b, a))
+
+    img.alpha_composite(logo, (x, y))
+
+
 def render_slide(slide, base, cfg):
     img = base.copy()
     draw = ImageDraw.Draw(img)
@@ -242,93 +248,11 @@ def render_slide(slide, base, cfg):
                 draw_rich_line(img, tx, cur_y, line, tf, bf, color, shadow, use_pm, pmj_context)
             cur_y += text_lh
 
-        for wm in cfg.get('wms', []):
-            if wm and (wm['text'] or wm['avatar']):
-                _draw_wm(img, wm, color, use_pm, pmj_context, draw)
+        # Отрисовка Логотипа / Вотермарка
+        if cfg.get('logo_bytes'):
+            _draw_logo(img, cfg['logo_bytes'], cfg['logo_size'], cfg['logo_x'], cfg['logo_y'], cfg['logo_alpha'])
 
     return img.convert("RGB")
-
-
-def _draw_wm(img, wm, default_color, use_pm, pmj_context, draw):
-    wf = wm['font']
-    if not wf:
-        return
-    alpha = wm['alpha']
-    text = wm['text']
-    av = wm['avatar']
-    av_sz = wm['av_size']
-
-    tw, th = 0, 0
-    if text:
-        clean_text = text.replace('\uFE0F', '').replace('\uFE0E', '')
-        tw = get_advance(draw, clean_text, wf)
-        bb = draw.textbbox((0, 0), strip_markers(text), font=wf)
-        th = bb[3] - bb[1]
-
-    total_w = int(tw) + (av_sz + 12 if av else 0)
-    bh = max(th, av_sz if av else 0)
-    wy = FH - 80 + wm['oy']
-
-    if wm['pos'] == 'Слева':
-        wx = 60 + wm['ox']
-    elif wm['pos'] == 'Справа':
-        wx = FW - total_w - 60 + wm['ox']
-    else:
-        wx = (FW - total_w) // 2 + wm['ox']
-
-    cx = int(wx)
-
-    if av and av_sz > 0:
-        a = av.copy().resize((av_sz, av_sz), Image.Resampling.LANCZOS).convert("RGBA")
-        mask = Image.new('L', (av_sz, av_sz), 0)
-        ImageDraw.Draw(mask).ellipse((0, 0, av_sz - 1, av_sz - 1), fill=255)
-        a.putalpha(mask)
-        ay = int(wy + (bh - av_sz) // 2)
-        img.alpha_composite(a, (cx, ay))
-        cx += av_sz + 12
-
-    if text:
-        ty = int(wy + (bh - th) // 2)
-        fill = (*default_color[:3], alpha)
-        clean_text = text.replace('\uFE0F', '').replace('\uFE0E', '')
-        if pmj_context:
-            pmj_context.text((cx, ty), clean_text, font=wf, fill=fill)
-        else:
-            draw.text((cx, ty), clean_text, font=wf, fill=fill)
-
-
-def wm_block(label, prefix):
-    with st.container(border=True):
-        st.markdown(f"### {label}")
-        text = st.text_input("Текст", value="", placeholder="@username", key=f"{prefix}_t", label_visibility="collapsed")
-        c1, c2 = st.columns(2)
-        with c1:
-            pos = st.selectbox("Позиция", ["Слева", "По центру", "Справа"], key=f"{prefix}_p")
-        with c2:
-            av_file = st.file_uploader("Аватарка", type=['png', 'jpg', 'jpeg'], key=f"{prefix}_a")
-        c3, c4 = st.columns(2)
-        with c3:
-            av_sz = st.slider("Аватарка px", 20, 120, 44, step=2, key=f"{prefix}_as")
-        with c4:
-            fsz = st.slider("Размер текста", 14, 60, 26, step=1, key=f"{prefix}_fs")
-        c5, c6, c7 = st.columns(3)
-        with c5:
-            alpha = st.slider("Прозрачность", 30, 255, 140, step=5, key=f"{prefix}_al")
-        with c6:
-            ox = st.slider("X", -300, 300, 0, step=5, key=f"{prefix}_ox")
-        with c7:
-            oy = st.slider("Y", -300, 300, 0, step=5, key=f"{prefix}_oy")
-
-    av_img = None
-    if av_file:
-        av_img = Image.open(av_file).convert("RGBA")
-
-    return {
-        'text': text, 'pos': pos,
-        'avatar': av_img, 'av_size': av_sz,
-        'font_size': fsz, 'alpha': alpha,
-        'ox': ox, 'oy': oy, 'font': None,
-    }
 
 
 # ─────────────────────────────────────────────
@@ -347,8 +271,23 @@ with left_col:
             )
             bg_darken = st.slider("Затемнение", 0, 100, 0, format="%d%%")
 
-        wm1 = wm_block("Никнейм 1", "w1")
-        wm2 = wm_block("Никнейм 2", "w2")
+        # НОВЫЙ БЛОК ЛОГОТИПА
+        with st.container(border=True):
+            st.markdown("### Логотип / Вотермарк")
+            st.caption("Рекомендуется PNG с прозрачным фоном")
+            logo_file = st.file_uploader("Логотип", type=['png', 'jpg', 'jpeg'], label_visibility="collapsed")
+            
+            lc_1, lc_2 = st.columns(2)
+            with lc_1:
+                logo_size = st.slider("Ширина (px)", 50, 800, 150, step=10)
+            with lc_2:
+                logo_alpha = st.slider("Прозрачность", 0, 255, 200, step=5)
+                
+            lc_3, lc_4 = st.columns(2)
+            with lc_3:
+                logo_x = st.slider("Позиция X (Лого)", -100, 1080, 50, step=10)
+            with lc_4:
+                logo_y = st.slider("Позиция Y (Лого)", -100, 1350, 1200, step=10)
 
         with st.container(border=True):
             st.markdown("### Типографика")
@@ -385,12 +324,11 @@ with left_col:
             with pc1:
                 text_x = st.slider("Позиция X", 20, 500, 90, step=5)
             with pc2:
-                # ЗНАЧЕНИЕ ПО УМОЛЧАНИЮ ИЗМЕНЕНО НА 200
                 text_y = st.slider("Позиция Y", 50, 1100, 200, step=10)
 
         with st.container(border=True):
             st.markdown("### Контент")
-            st.caption("Кликни мимо поля, чтобы применить текст")
+            st.caption("Кликни мимо поля, чтобы обновить превью")
             default_text = """ЗАГОЛОВОК 1
 Текст первого слайда. ⚡
 
@@ -418,13 +356,6 @@ with right_col:
             fonts_ok = False
             st.error("Шрифты не найдены")
 
-        if fonts_ok:
-            try:
-                wm1['font'] = ImageFont.truetype(BODY_FONT_PATH, wm1['font_size'])
-                wm2['font'] = ImageFont.truetype(BODY_FONT_PATH, wm2['font_size'])
-            except IOError:
-                pass
-
         use_pilmoji = HAS_PILMOJI
         if not HAS_PILMOJI:
             st.caption("Установи pilmoji для эмодзи")
@@ -443,11 +374,16 @@ with right_col:
             't_spacing': t_spacing,
             'use_pilmoji': use_pilmoji,
             'emoji_dy': emoji_dy,
-            'wms': [wm1, wm2],
+            'logo_bytes': logo_file.getvalue() if logo_file else None,
+            'logo_size': logo_size,
+            'logo_alpha': logo_alpha,
+            'logo_x': logo_x,
+            'logo_y': logo_y
         }
 
         slides_data = parse_slides(text_input) if text_input.strip() else []
 
+        # ── PREVIEW (ОБНОВЛЯЕТСЯ АВТОМАТИЧЕСКИ) ──
         st.write("") 
         if uploaded_bgs and fonts_ok and slides_data:
             bg = prepare_bg_cached(uploaded_bgs[0].getvalue(), bg_darken, FW, FH)
@@ -464,6 +400,7 @@ with right_col:
         st.write("---") 
         btn = st.button("🚀 Сгенерировать карусель", type="primary", use_container_width=True)
 
+        # ── ЛОГИКА ГЕНЕРАЦИИ (ЗАПИСЬ В ПАМЯТЬ) ──
         if btn:
             if not uploaded_bgs:
                 st.error("Загрузи фоны!")
@@ -478,25 +415,34 @@ with right_col:
                         bg = prepare_bg_cached(uploaded_bgs[i % len(uploaded_bgs)].getvalue(), bg_darken, FW, FH)
                         images.append(render_slide(slide, bg, cfg))
 
-                st.success(f"Готово – {len(images)} слайд(ов)")
-                
-                cols = st.columns(2)
-                for idx, im in enumerate(images):
-                    cols[idx % 2].image(im, caption=f"Слайд {idx+1}", use_container_width=True)
+                # Сохраняем картинки в сессию
+                st.session_state.generated_images = images
 
-                # ИЗМЕНЕНО НА ФОРМАТ PNG ДЛЯ ИДЕАЛЬНОГО КАЧЕСТВА
+                # Собираем ZIP
                 buf = io.BytesIO()
                 with zipfile.ZipFile(buf, "a", zipfile.ZIP_DEFLATED) as zf:
                     for idx, im in enumerate(images):
                         b = io.BytesIO()
                         im.save(b, format='PNG')
-                        zf.writestr(f"slide_{idx+1}.png", b.getvalue())
+                        # Форматирование: 01_slide.png, 02_slide.png
+                        zf.writestr(f"{idx+1:02d}_slide.png", b.getvalue())
 
-                st.download_button(
-                    "Скачать карусель (ZIP)",
-                    data=buf.getvalue(),
-                    file_name="carousel.zip",
-                    mime="application/zip",
-                    type="primary",
-                    use_container_width=True,
-                )
+                # Сохраняем архив в сессию
+                st.session_state.zip_buffer = buf.getvalue()
+
+        # ── ВЫВОД РЕЗУЛЬТАТОВ ИЗ ПАМЯТИ ──
+        if st.session_state.generated_images:
+            st.success(f"Готово – {len(st.session_state.generated_images)} слайд(ов)")
+            
+            cols = st.columns(2)
+            for idx, im in enumerate(st.session_state.generated_images):
+                cols[idx % 2].image(im, caption=f"Слайд {idx+1}", use_container_width=True)
+
+            st.download_button(
+                "📥 Скачать карусель (ZIP)",
+                data=st.session_state.zip_buffer,
+                file_name="carousel.zip",
+                mime="application/zip",
+                type="primary",
+                use_container_width=True,
+            )
