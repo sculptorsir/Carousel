@@ -114,13 +114,20 @@ def get_advance(d, text, font):
 
 
 def wrap_pixels(text, font, max_w, draw):
-    words = text.split()
+    # Распределяем жирность для переноса по одному слову
+    def distribute_bold(match):
+        content = match.group(1)
+        return ' '.join([f'*{w}*' for w in content.split()])
+    
+    processed_text = re.sub(r'\*([^*]+)\*', distribute_bold, text)
+    words = processed_text.split()
+    
     if not words:
         return ['']
     lines, cur = [], [words[0]]
     for w in words[1:]:
         test = strip_markers(' '.join(cur + [w]))
-        tw = get_advance(draw, test, font)
+        tw = get_advance(draw, test.replace('\uFE0F', ''), font)
         if tw <= max_w:
             cur.append(w)
         else:
@@ -191,12 +198,10 @@ def prepare_bg_cached(file_bytes, darken, final_w, final_h):
 def _draw_logo(img, logo_bytes, size, x, y, alpha):
     logo = Image.open(io.BytesIO(logo_bytes)).convert("RGBA")
     w, h = logo.size
-    # Пропорциональное изменение размера по ширине
     ratio = size / float(w)
     new_h = int((float(h) * float(ratio)))
     logo = logo.resize((size, new_h), Image.Resampling.LANCZOS)
 
-    # Применяем прозрачность
     if alpha < 255:
         r, g, b, a = logo.split()
         a = a.point(lambda p: int(p * (alpha / 255.0)))
@@ -248,7 +253,6 @@ def render_slide(slide, base, cfg):
                 draw_rich_line(img, tx, cur_y, line, tf, bf, color, shadow, use_pm, pmj_context)
             cur_y += text_lh
 
-        # Отрисовка Логотипа / Вотермарка
         if cfg.get('logo_bytes'):
             _draw_logo(img, cfg['logo_bytes'], cfg['logo_size'], cfg['logo_x'], cfg['logo_y'], cfg['logo_alpha'])
 
@@ -271,7 +275,6 @@ with left_col:
             )
             bg_darken = st.slider("Затемнение", 0, 100, 0, format="%d%%")
 
-        # НОВЫЙ БЛОК ЛОГОТИПА
         with st.container(border=True):
             st.markdown("### Логотип / Вотермарк")
             st.caption("Рекомендуется PNG с прозрачным фоном")
@@ -279,15 +282,16 @@ with left_col:
             
             lc_1, lc_2 = st.columns(2)
             with lc_1:
-                logo_size = st.slider("Ширина (px)", 50, 800, 150, step=10)
+                # ОБНОВЛЕНЫ ДЕФОЛТНЫЕ ЗНАЧЕНИЯ ЛОГОТИПА
+                logo_size = st.slider("Ширина (px)", 50, 800, 390, step=10)
             with lc_2:
-                logo_alpha = st.slider("Прозрачность", 0, 255, 200, step=5)
+                logo_alpha = st.slider("Прозрачность", 0, 255, 230, step=5)
                 
             lc_3, lc_4 = st.columns(2)
             with lc_3:
-                logo_x = st.slider("Позиция X (Лого)", -100, 1080, 50, step=10)
+                logo_x = st.slider("Позиция X (Лого)", -100, 1080, 90, step=10)
             with lc_4:
-                logo_y = st.slider("Позиция Y (Лого)", -100, 1350, 1200, step=10)
+                logo_y = st.slider("Позиция Y (Лого)", -100, 1350, 1210, step=10)
 
         with st.container(border=True):
             st.markdown("### Типографика")
@@ -298,33 +302,38 @@ with left_col:
                 add_shadow = st.toggle("Тень текста", value=False)
             tc3, tc4 = st.columns(2)
             with tc3:
+                # ОБНОВЛЕНЫ ЗНАЧЕНИЯ ШРИФТОВ
                 header_size = st.slider("Заголовок", 30, 120, 70, step=2)
             with tc4:
                 text_size = st.slider("Текст", 20, 80, 40, step=2)
             
-            space_gap = st.slider("Отступ заголовок → текст", 10, 250, 100, step=10)
-            emoji_dy = st.slider("Высота эмодзи", -40, 40, -15, step=1)
+            # ОБНОВЛЕНЫ ОТСТУПЫ И ЭМОДЗИ
+            space_gap = st.slider("Отступ заголовок → текст", 10, 250, 50, step=10)
+            emoji_dy = st.slider("Высота эмодзи", -40, 40, -28, step=1)
 
         with st.container(border=True):
             st.markdown("### Межстрочный интервал")
             lc1, lc2 = st.columns(2)
             with lc1:
+                # ОБНОВЛЕН ИНТЕРВАЛ
                 h_spacing = st.slider("Заголовок", 1.0, 2.5, 1.25, step=0.05, key="hsp")
             with lc2:
-                t_spacing = st.slider("Текст", 1.0, 3.0, 1.55, step=0.05, key="tsp")
+                t_spacing = st.slider("Текст", 1.0, 3.0, 1.35, step=0.05, key="tsp")
 
         with st.container(border=True):
             st.markdown("### Контейнер текста")
             kc1, kc2 = st.columns(2)
             with kc1:
-                header_w = st.slider("Ширина заголовка", 300, 1040, 900, step=10)
+                # ОБНОВЛЕНА ШИРИНА
+                header_w = st.slider("Ширина заголовка", 300, 1040, 800, step=10)
             with kc2:
-                body_w = st.slider("Ширина текста", 300, 1040, 900, step=10)
+                body_w = st.slider("Ширина текста", 300, 1040, 760, step=10)
             pc1, pc2 = st.columns(2)
             with pc1:
+                # ОБНОВЛЕНЫ КООРДИНАТЫ
                 text_x = st.slider("Позиция X", 20, 500, 90, step=5)
             with pc2:
-                text_y = st.slider("Позиция Y", 50, 1100, 200, step=10)
+                text_y = st.slider("Позиция Y", 50, 1100, 130, step=10)
 
         with st.container(border=True):
             st.markdown("### Контент")
@@ -383,7 +392,6 @@ with right_col:
 
         slides_data = parse_slides(text_input) if text_input.strip() else []
 
-        # ── PREVIEW (ОБНОВЛЯЕТСЯ АВТОМАТИЧЕСКИ) ──
         st.write("") 
         if uploaded_bgs and fonts_ok and slides_data:
             bg = prepare_bg_cached(uploaded_bgs[0].getvalue(), bg_darken, FW, FH)
@@ -400,7 +408,6 @@ with right_col:
         st.write("---") 
         btn = st.button("🚀 Сгенерировать карусель", type="primary", use_container_width=True)
 
-        # ── ЛОГИКА ГЕНЕРАЦИИ (ЗАПИСЬ В ПАМЯТЬ) ──
         if btn:
             if not uploaded_bgs:
                 st.error("Загрузи фоны!")
@@ -415,22 +422,17 @@ with right_col:
                         bg = prepare_bg_cached(uploaded_bgs[i % len(uploaded_bgs)].getvalue(), bg_darken, FW, FH)
                         images.append(render_slide(slide, bg, cfg))
 
-                # Сохраняем картинки в сессию
                 st.session_state.generated_images = images
 
-                # Собираем ZIP
                 buf = io.BytesIO()
                 with zipfile.ZipFile(buf, "a", zipfile.ZIP_DEFLATED) as zf:
                     for idx, im in enumerate(images):
                         b = io.BytesIO()
                         im.save(b, format='PNG')
-                        # Форматирование: 01_slide.png, 02_slide.png
                         zf.writestr(f"{idx+1:02d}_slide.png", b.getvalue())
 
-                # Сохраняем архив в сессию
                 st.session_state.zip_buffer = buf.getvalue()
 
-        # ── ВЫВОД РЕЗУЛЬТАТОВ ИЗ ПАМЯТИ ──
         if st.session_state.generated_images:
             st.success(f"Готово – {len(st.session_state.generated_images)} слайд(ов)")
             
