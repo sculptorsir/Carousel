@@ -433,18 +433,48 @@ with right_col:
 
                 st.session_state.zip_buffer = buf.getvalue()
 
+# ── ВЫВОД РЕЗУЛЬТАТОВ ИЗ ПАМЯТИ ──
         if st.session_state.generated_images:
             st.success(f"Готово – {len(st.session_state.generated_images)} слайд(ов)")
             
+            # 1. Показываем превью
             cols = st.columns(2)
             for idx, im in enumerate(st.session_state.generated_images):
                 cols[idx % 2].image(im, caption=f"Слайд {idx+1}", use_container_width=True)
 
+            # 2. Главная кнопка скачивания архива
             st.download_button(
-                "📥 Скачать карусель (ZIP)",
+                "📥 Скачать всю карусель (ZIP)",
                 data=st.session_state.zip_buffer,
                 file_name="carousel.zip",
                 mime="application/zip",
                 type="primary",
                 use_container_width=True,
             )
+
+            # 3. Мини-кнопки для скачивания по одному
+            st.write("---")
+            st.markdown("**Или скачать слайды по отдельности:**")
+            
+            num_slides = len(st.session_state.generated_images)
+            # Разбиваем кнопки на ряды (максимум по 4 в ряд, чтобы не было слишком тесно)
+            for row_start in range(0, num_slides, 4):
+                row_end = min(row_start + 4, num_slides)
+                btn_cols = st.columns(row_end - row_start)
+                
+                for col_idx, idx in enumerate(range(row_start, row_end)):
+                    im = st.session_state.generated_images[idx]
+                    
+                    # Конвертируем конкретную картинку в байты
+                    img_bytes = io.BytesIO()
+                    im.save(img_bytes, format='PNG')
+                    
+                    with btn_cols[col_idx]:
+                        st.download_button(
+                            label=f"📄 Слайд {idx+1}",
+                            data=img_bytes.getvalue(),
+                            file_name=f"{idx+1:02d}_slide.png",
+                            mime="image/png",
+                            use_container_width=True,
+                            key=f"single_dl_{idx}" # Уникальный ключ обязателен для каждой кнопки
+                        )
